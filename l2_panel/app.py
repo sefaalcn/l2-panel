@@ -257,9 +257,9 @@ async def ingest(
     x_l2_ingest_token: Optional[str] = Header(None, alias="X-L2-Ingest-Token"),
 ):
     """
-    Scene Studio → L2.5 köprüsü.
+    Sürükle-bırak / Studio köprüsü.
     multipart: project, scenes (JSON), keyframes_zip, video? (mp4)
-    Cloud: Drive'a yazar. Local: PROJECTS_ROOT/<project>/.
+    Her zaman PROJECTS_ROOT/<project>/ altına yazar (Drive yok — panelden yükle).
     """
     _check_ingest_auth(authorization, x_l2_ingest_token)
     from l2_panel.ingest import materialize_export, _safe_project_name
@@ -292,24 +292,8 @@ async def ingest(
         )
         local_proj = pathlib.Path(info["path"])
 
-        if _is_cloud():
-            from l2_panel import drive as drv
-            if not drv.configured():
-                raise HTTPException(500, "Cloud ingest: Drive yapılandırması eksik")
-            folder_id = drv.ensure_project_folder(project)
-            drv.upload_tree(local_proj, folder_id)
-            return {
-                "ok": True,
-                "runtime": "cloud",
-                "project": project,
-                "folder_id": folder_id,
-                "drive_url": drv.folder_url(folder_id),
-                "has_keyframes": info["has_keyframes"],
-                "video": info["video"],
-                "extracted": info["extracted"],
-            }
-
-        # local
+        # Her zaman yerel projects/ — Drive kullanılmaz
+        ROOT.mkdir(parents=True, exist_ok=True)
         dest = ROOT / project
         dest.mkdir(parents=True, exist_ok=True)
         for item in local_proj.iterdir():
@@ -365,35 +349,20 @@ def set_keys(body: KeysReq):
 
 @app.get("/projects")
 def projects():
-    if _is_cloud():
-        from l2_panel import drive as drv
-        if not drv.configured():
-            raise HTTPException(500, "Cloud: L2_DRIVE_ROOT_ID + Google service account gerekli")
-        out = []
-        for f in drv.list_project_folders():
-            badges = drv.project_badges(f["id"])
-            if badges["has_scenes_json"] or badges["has_keyframes"]:
-                out.append({
-                    "name": f["name"],
-                    "folder_id": f["id"],
-                    "drive_url": drv.folder_url(f["id"]),
-                    "has_scenes_json": badges["has_scenes_json"],
-                    "scenes_json": badges["scenes_json"],
-                    "version": None,
-                    "has_keyframes": badges["has_keyframes"],
-                    "has_prompts": badges["has_prompts"],
-                    "scene_count": None,
-                })
-        return {"root": f"drive:{DRIVE_ROOT_ID}", "runtime": "cloud", "projects": out}
-
+    # Sürükle-bırak / ingest → PROJECTS_ROOT. Drive listesi kullanılmaz.
     if not ROOT.is_dir():
-        raise HTTPException(500, f"PROJECTS_ROOT yok: {ROOT}")
+        ROOT.mkdir(parents=True, exist_ok=True)
     out = []
     for d in sorted(ROOT.iterdir()):
         if not d.is_dir() or d.name.startswith(".") or d.name == "OLD":
             continue
         s = _project_summary(d)
-        if s["has_scenes_json"] or s["has_keyframes"]:
+        has_video = any(
+            "_small" not in p.stem and "_output" not in str(p.parent)
+            for p in d.glob("*.mp4")
+        )
+        s["has_video"] = has_video
+        if s["has_scenes_json"] or s["has_keyframes"] or has_video:
             out.append(s)
     return {"root": str(ROOT), "runtime": "local", "projects": out}
 

@@ -33,11 +33,11 @@ SCRATCH_ROOT = os.environ.get(
 
 DRIVE_ROOT_ID = (os.environ.get("L2_DRIVE_ROOT_ID") or "").strip()
 
-_runtime_env = (os.environ.get("L2_RUNTIME") or "").strip().lower()
+_runtime_env = (os.environ.get("L2_RUNTIME") or "local").strip().lower()
 if _runtime_env in ("local", "cloud"):
     RUNTIME = _runtime_env
 else:
-    RUNTIME = "cloud" if DRIVE_ROOT_ID else "local"
+    RUNTIME = "local"
 
 MODELS = {
     "hailuo": {

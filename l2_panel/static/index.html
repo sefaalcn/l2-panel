@@ -106,6 +106,15 @@
   .waiting { background: var(--warn-soft); color: var(--warn); border-radius: 9px; padding: 14px; text-align: center;
     font-weight: 600; font-size: 13px; }
   .proj-badges { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+  .drop {
+    border: 2px dashed var(--border); border-radius: var(--radius); padding: 18px 14px;
+    text-align: center; background: var(--inset); color: var(--muted); cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+  .drop strong { color: var(--text); display: block; margin-bottom: 4px; }
+  .drop .files { margin-top: 10px; text-align: left; font-size: 12px; color: var(--text); }
+  .drop .files div { padding: 2px 0; font-family: var(--mono); font-size: 11.5px; }
   .actions { display: flex; gap: 10px; margin-top: 16px; }
 </style>
 </head>
@@ -113,7 +122,7 @@
 <div class="wrap">
   <header class="top">
     <h1>L2.5 Üretim Paneli</h1>
-    <span class="sub">Studio JSON'u yerelde üret · başlat + izle</span>
+    <span class="sub">JSON + keyframes sürükle-bırak · üret</span>
     <span style="margin-left:auto" class="sub"><span class="dot" id="livedot"></span> <span id="livetxt">boşta</span></span>
   </header>
 
@@ -121,6 +130,22 @@
     <!-- SOL: Kur & Başlat -->
     <div class="card" id="setup">
       <h2>Kur &amp; Başlat</h2>
+
+      <div style="margin-bottom:14px; padding-bottom:13px; border-bottom:1px solid var(--border)">
+        <div class="section-t" style="margin:0 0 8px">Proje yükle
+          <span style="text-transform:none;font-weight:400;color:var(--muted)">— scenes JSON + keyframes ZIP (+ mp4)</span></div>
+        <label class="fld" style="margin-bottom:8px"><span>Proje adı</span>
+          <input type="text" id="drop-project" placeholder="örn: ice_cream_truck" autocomplete="off" /></label>
+        <div class="drop" id="dropzone" tabindex="0">
+          <strong>Sürükle-bırak</strong>
+          <span class="hint">*_scenes_manual.json · *_keyframes.zip · isteğe mp4</span>
+          <div class="files" id="drop-files"></div>
+        </div>
+        <input type="file" id="drop-input" multiple accept=".json,.zip,.mp4,.mov" style="display:none" />
+        <button class="primary" id="uploadBtn" style="margin-top:10px" disabled>Yükle</button>
+        <div class="hint" id="uploadmsg" style="margin-top:6px"></div>
+      </div>
+
       <div id="keys" style="margin-bottom:14px; padding-bottom:13px; border-bottom:1px solid var(--border)">
         <div class="section-t" style="margin:0 0 8px">API Anahtarları
           <span style="text-transform:none;font-weight:400;color:var(--muted)">— oturum belleği, diske yazılmaz; env'de varsa gerekmez</span></div>
@@ -198,8 +223,81 @@ async function jget(u){ const r = await fetch(u); if(!r.ok) throw new Error((awa
 async function jpost(u,b){ const r = await fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});
   const d = await r.json().catch(()=>({})); return {ok:r.ok, status:r.status, d}; }
 
+// ---- sürükle-bırak yükleme ----
+const dropState = { scenes: null, zip: null, video: null };
+
+function guessProjectName(file){
+  let n = file.name.replace(/\.[^.]+$/, "");
+  n = n.replace(/_scenes_manual$/i,"").replace(/_scenes$/i,"").replace(/_keyframes$/i,"");
+  return n;
+}
+function classifyFiles(fileList){
+  for(const f of fileList){
+    const low = f.name.toLowerCase();
+    if(low.endsWith(".json") && low.includes("scenes")){ dropState.scenes = f; if(!$("#drop-project").value) $("#drop-project").value = guessProjectName(f); }
+    else if(low.endsWith(".zip")){ dropState.zip = f; if(!$("#drop-project").value) $("#drop-project").value = guessProjectName(f); }
+    else if(low.endsWith(".mp4")||low.endsWith(".mov")||low.endsWith(".webm")){ dropState.video = f; if(!$("#drop-project").value) $("#drop-project").value = guessProjectName(f); }
+  }
+  renderDropFiles();
+}
+function renderDropFiles(){
+  const el = $("#drop-files");
+  const rows = [];
+  if(dropState.scenes) rows.push(`JSON ✓ ${dropState.scenes.name}`);
+  else rows.push(`JSON ✗`);
+  if(dropState.zip) rows.push(`ZIP ✓ ${dropState.zip.name}`);
+  else rows.push(`ZIP ✗`);
+  if(dropState.video) rows.push(`Video ✓ ${dropState.video.name}`);
+  else rows.push(`Video — opsiyonel`);
+  el.innerHTML = rows.map(r=>`<div>${r}</div>`).join("");
+  $("#uploadBtn").disabled = !(dropState.scenes && dropState.zip && $("#drop-project").value.trim());
+}
+function setupDrop(){
+  const z = $("#dropzone"), inp = $("#drop-input");
+  z.onclick = ()=> inp.click();
+  inp.onchange = ()=>{ if(inp.files?.length) classifyFiles(inp.files); };
+  ["dragenter","dragover"].forEach(ev=> z.addEventListener(ev, e=>{ e.preventDefault(); z.classList.add("over"); }));
+  ["dragleave","drop"].forEach(ev=> z.addEventListener(ev, e=>{ e.preventDefault(); if(ev==="dragleave") z.classList.remove("over"); }));
+  z.addEventListener("drop", e=>{
+    z.classList.remove("over");
+    if(e.dataTransfer?.files?.length) classifyFiles(e.dataTransfer.files);
+  });
+  $("#drop-project").oninput = renderDropFiles;
+  $("#uploadBtn").onclick = doUpload;
+}
+async function doUpload(){
+  const project = $("#drop-project").value.trim();
+  if(!project || !dropState.scenes || !dropState.zip){ return; }
+  const btn = $("#uploadBtn"), msg = $("#uploadmsg");
+  btn.disabled = true; btn.textContent = "Yükleniyor…"; msg.textContent = "";
+  try{
+    const fd = new FormData();
+    fd.append("project", project);
+    fd.append("scenes", dropState.scenes, dropState.scenes.name);
+    fd.append("keyframes_zip", dropState.zip, dropState.zip.name);
+    if(dropState.video) fd.append("video", dropState.video, dropState.video.name);
+    const r = await fetch("/ingest", { method:"POST", body: fd });
+    const d = await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(d.detail || d.error || `HTTP ${r.status}`);
+    msg.innerHTML = `<span style="color:var(--ok)">✓ ${d.project} yüklendi${d.has_keyframes?"":" (keyframes eksik?)"}</span>`;
+    dropState.scenes = dropState.zip = dropState.video = null;
+    inpClear();
+    renderDropFiles();
+    await loadProjects();
+    $("#project").value = d.project;
+    await onProject();
+  }catch(e){
+    msg.innerHTML = `<span style="color:var(--err)">Yükleme hatası: ${e.message||e}</span>`;
+  }finally{
+    btn.disabled = false; btn.textContent = "Yükle";
+    renderDropFiles();
+  }
+}
+function inpClear(){ const inp=$("#drop-input"); if(inp) inp.value=""; }
+
 // ---- init ----
 (async function(){
+  setupDrop();
   const m = await jget("/models"); MODELS = m.models; ENV_SET = m.env_set||{};
   renderEnv(); bindKeys();
   const sel = $("#model");
