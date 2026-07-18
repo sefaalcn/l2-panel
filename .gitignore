@@ -1,16 +1,3 @@
-# env & secrets
-.env
-.env.*
-!.env.example
-service-account*.json
-*-sa.json
-credentials.json
-
-# L2 runtime
-.l2_scratch/
-l2_panel/.l2_*.txt
-l2_panel/.l2_active_run.json
-projects/
 
 # token / cookie dosyaları (asla commit etme)
 hailuo_token.txt
