@@ -1,31 +1,35 @@
-# L2.5 — Üretim Paneli
+# L2.5 — Next.js Üretim Paneli
 
-Sürükle-bırak ile proje yükle → Hailuo üret. Drive yok.
+UI + API: **Next.js**. Üretim motoru: Python (`gemini_direct`, `video_router`, `l2_panel.l2_run`).
 
-## Yerel çalıştır
+## Kurulum
 
 ```
+npm install
 pip install -r requirements.txt
-python -m uvicorn app:app --host 127.0.0.1 --port 8751
 ```
 
-Tarayıcı: http://127.0.0.1:8751
+## Geliştirme
+
+```
+npm run dev
+```
+
+http://127.0.0.1:8751
 
 ## Kullanım
 
-1. Panelde **Proje yükle** alanına bırak:
-   - `*_scenes_manual.json`
-   - `*_keyframes.zip` (içinde `keyframes/scene_XXX/frame_*.jpg`)
-   - isteğe bağlı `.mp4`
-2. **Yükle** → proje listede görünür
-3. Hailuo token / cookie / proje ID → **Başlat**
+1. Scenes JSON + keyframes ZIP sürükle-bırak → **Yükle**
+2. Hailuo token / cookie / proje ID → **Başlat**
+3. Python `l2_run` arka planda çalışır (`projects/<ad>/`)
 
-Studio’daki **L2.5'e gönder** tuşu da aynı `/ingest` endpoint’ine gider (`L2_PANEL_URL`).
+## Vercel
 
-## Klasör
+`vercel --prod` — Next.js framework. Uzun koşu için paneli yerelde çalıştır (Vercel’de dosya + subprocess sınırlı).
 
-Yüklenenler: `L2_PROJECTS_ROOT` (varsayılan `./projects/<proje>/`).
+## Python (worker)
 
-## Vercel notu
-
-Canlı UI için Vercel kullanılabilir; uzun Hailuo koşusu ve kalıcı dosya için paneli **yerelde** (veya worker’lı makinede) çalıştır.
+```
+python -m l2_panel.l2_run --help
+python -m l2_panel.worker   # eski Drive worker (opsiyonel)
+```

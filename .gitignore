@@ -1,4 +1,3 @@
-
 # token / cookie dosyaları (asla commit etme)
 hailuo_token.txt
 hailuo_cookie.txt
@@ -19,7 +18,22 @@ __pycache__/
 venv/
 *.egg-info/
 
+# node / next
+node_modules/
+.next/
+out/
+npm-debug.log*
+
 # vercel
 .vercel
 
-.vercel
+# env
+.env
+.env.*
+
+# runtime
+.l2_scratch/
+l2_panel/.l2_*.txt
+l2_panel/.l2_active_run.json
+projects/*
+!projects/.gitkeep
