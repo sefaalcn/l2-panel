@@ -1,0 +1,11 @@
+google-genai
+anthropic
+requests
+oss2
+Pillow
+fastapi
+uvicorn
+pydantic
+python-multipart
+google-api-python-client
+google-auth

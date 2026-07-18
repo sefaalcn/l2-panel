@@ -1,0 +1,36 @@
+# env & secrets
+.env
+.env.*
+!.env.example
+service-account*.json
+*-sa.json
+credentials.json
+
+# L2 runtime
+.l2_scratch/
+l2_panel/.l2_*.txt
+l2_panel/.l2_active_run.json
+projects/
+
+# token / cookie dosyaları (asla commit etme)
+hailuo_token.txt
+hailuo_cookie.txt
+hailuo_project.txt
+firefly_token.txt
+firefly_arp.txt
+firefly_nonce.txt
+kling_arp.txt
+kling_nonce.txt
+runway_arp.txt
+runway_nonce.txt
+
+# python
+__pycache__/
+*.py[cod]
+.Python
+.venv/
+venv/
+*.egg-info/
+
+# vercel
+.vercel
