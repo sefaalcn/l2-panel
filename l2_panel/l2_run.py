@@ -49,10 +49,15 @@ def main():
     ap.add_argument("--concurrency", default=None)
     ap.add_argument("--scenes", default=None)         # opsiyonel sahne filtresi -> run_hailuo --scenes
     ap.add_argument("--no-optimizer", action="store_true")
+    ap.add_argument("--keyframes-source", default="original",
+                    choices=["original", "swapped"],
+                    help="keyframes/ (original) veya keyframes_swapped/ (swapped)")
     ap.add_argument("--log", required=True)
     args = ap.parse_args()
 
     proj = pathlib.Path(args.project_path)
+    # Tercihi proje klasörüne yaz (gemini_direct / cli dosyadan da okuyabilir)
+    (proj / ".l2_keyframes_source").write_text(args.keyframes_source, encoding="utf-8")
     logf = open(args.log, "a", buffering=1, encoding="utf-8")
     py = sys.executable
 
@@ -71,14 +76,16 @@ def main():
         # 1) PROMPT (yoksa) — uzun sürer, runstate 'prompt_uretiliyor' göstersin
         prompts = proj / f"{proj.name}_output" / "hailuo_prompts_claude.json"
         if not prompts.exists():
-            gcmd = [py, "gemini_direct.py", "--path", str(proj)]
+            gcmd = [py, "gemini_direct.py", "--path", str(proj),
+                    "--keyframes-source", args.keyframes_source]
             if args.scenes:
                 gcmd += ["--scenes", args.scenes]     # yalniz test sahnelerini uret (format: 1-2 / N)
             rc = run(gcmd, "prompt_uretiliyor")
             if rc != 0:
                 _update("hata", error=f"gemini_direct rc={rc}"); return
         # 2) VIDEO — Pool
-        cmd = [py, "-u", "-m", "video_router.run_hailuo", "--path", str(proj), "--variants", args.variants]
+        cmd = [py, "-u", "-m", "video_router.run_hailuo", "--path", str(proj),
+               "--variants", args.variants, "--keyframes-source", args.keyframes_source]
         if args.concurrency:
             cmd += ["--concurrency", str(args.concurrency)]
         # Proje ID: panel .l2_project.txt yazar + HAILUO_PROJECT_FILE env verir (token/cookie ile ayni desen).

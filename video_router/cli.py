@@ -17,11 +17,24 @@ import sys
 from . import runner
 
 
-def _resolve_paths(provider, video_dir):
+def _resolve_paths(provider, video_dir, keyframes_source=None):
     video_dir = pathlib.Path(video_dir).expanduser()
     name = video_dir.name
     prompts = video_dir / f"{name}_output" / "hailuo_prompts_claude.json"
-    keyframes = video_dir / "keyframes"
+    # Kaynak: bayrak > .l2_keyframes_source > original
+    source = keyframes_source
+    if source not in ("original", "swapped"):
+        pref = video_dir / ".l2_keyframes_source"
+        if pref.exists():
+            source = pref.read_text(encoding="utf-8").strip().lower()
+        else:
+            source = "original"
+    if source == "swapped":
+        keyframes = video_dir / "keyframes_swapped"
+        if not keyframes.exists():
+            keyframes = video_dir / "keyframes"  # geriye donuk: klasor yoksa original
+    else:
+        keyframes = video_dir / "keyframes"
     if provider == "firefly":
         out = video_dir / "firefly_videos"
         prog = video_dir / "firefly_progress.json"
@@ -57,10 +70,15 @@ def main(provider: str):
                     help="M1 Pool: verilmezse SIRALI (mevcut). 1=Pool regresyon (sirali denk), 2+=paralel uretim.")
     ap.add_argument("--no-optimizer", dest="prompt_optimizer", action="store_false",
                     help="Hailuo prompt optimizer'i KAPAT (verbatim, useOriginPrompt=True). Varsayilan: acik (optimize).")
+    ap.add_argument("--keyframes-source", default=None, choices=["original", "swapped"],
+                    help="keyframes/ (original) veya keyframes_swapped/ (swapped). "
+                         "Verilmezse .l2_keyframes_source veya original.")
     ap.set_defaults(prompt_optimizer=True)
     args = ap.parse_args()
 
-    video_dir, prompts, keyframes, out, prog = _resolve_paths(provider, args.path)
+    video_dir, prompts, keyframes, out, prog = _resolve_paths(
+        provider, args.path, args.keyframes_source)
+    print(f"[cli] keyframes_dir={keyframes}")
 
     # Varyant: bayrak varsa onu kullan (otomasyon), yoksa interaktif sor.
     if args.variants:

@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
 import { CODE_ROOT, MODELS, PANEL_DIR, PROJECTS_ROOT, sessionKeys } from "@/lib/config";
+import { KEYFRAMES_SOURCE_FILE, parseKeyframesSource } from "@/lib/ingest";
 import { activeRun, cleanCredFiles, writeRunstate } from "@/lib/runstate";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +17,7 @@ export async function POST(req: Request) {
   const scenes = body.scenes ? String(body.scenes) : null;
   const credentials = (body.credentials || {}) as Record<string, string>;
   const promptOptimizer = body.prompt_optimizer !== false;
+  const keyframesSource = parseKeyframesSource(body.keyframes_source);
 
   const active = activeRun();
   if (active) {
@@ -30,6 +32,7 @@ export async function POST(req: Request) {
   if (!fs.existsSync(proj)) {
     return NextResponse.json({ detail: `Proje yok: ${project}` }, { status: 404 });
   }
+  fs.writeFileSync(path.join(proj, KEYFRAMES_SOURCE_FILE), keyframesSource, "utf8");
   const model = MODELS[provider as keyof typeof MODELS];
   if (!model) {
     return NextResponse.json({ detail: `Bilinmeyen model: ${provider}` }, { status: 400 });
@@ -71,6 +74,7 @@ export async function POST(req: Request) {
   if (concurrency) args.push("--concurrency", String(concurrency));
   if (scenes) args.push("--scenes", scenes);
   if (!promptOptimizer) args.push("--no-optimizer");
+  args.push("--keyframes-source", keyframesSource);
 
   const child = spawn(py, args, {
     cwd: CODE_ROOT,

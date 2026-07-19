@@ -86,12 +86,37 @@ ul.list li { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; bor
 .waiting { background: var(--warn-soft); color: var(--warn); border-radius: 9px; padding: 14px; text-align: center;
   font-weight: 600; font-size: 13px; }
 .proj-badges { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+.seg {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+  padding: 4px; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 10px; margin-bottom: 10px;
+}
+.seg-btn {
+  appearance: none; border: 0; background: transparent; color: var(--muted);
+  font: inherit; font-size: 12.5px; font-weight: 600; padding: 10px 8px;
+  border-radius: 8px; cursor: pointer; text-align: center; line-height: 1.25;
+  transition: background .15s, color .15s, box-shadow .15s;
+}
+.seg-btn small { display: block; font-weight: 500; font-size: 10.5px; opacity: .75; margin-top: 2px; }
+.seg-btn:hover { color: var(--text); background: var(--inset); }
+.seg-btn.on {
+  background: var(--surface); color: var(--text); box-shadow: var(--shadow);
+}
+.seg-btn.on.swapped { color: var(--accent-ink); background: var(--accent-soft); }
+.derived {
+  font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+  margin: 0 0 10px; padding: 6px 8px; background: var(--inset);
+  border-radius: 8px; border: 1px solid var(--border);
+}
+.derived b { color: var(--text); font-weight: 600; }
 .drop {
   border: 2px dashed var(--border); border-radius: var(--radius); padding: 18px 14px;
   text-align: center; background: var(--inset); color: var(--muted); cursor: pointer;
 }
+.drop.drop-sm { padding: 12px 12px; margin-bottom: 8px; text-align: left; }
+.drop.drop-sm strong { font-size: 12.5px; }
 .drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
 .drop strong { color: var(--text); display: block; margin-bottom: 4px; }
-.drop .files { margin-top: 10px; text-align: left; font-size: 12px; color: var(--text); }
-.drop .files div { padding: 2px 0; font-family: var(--mono); font-size: 11.5px; }
+.drop .files { margin-top: 8px; text-align: left; font-size: 12px; color: var(--text); }
+.drop .files div { padding: 2px 0; font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
 .actions { display: flex; gap: 10px; margin-top: 16px; }

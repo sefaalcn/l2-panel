@@ -84,9 +84,26 @@ def setup_project():
     js = list(BASE.glob("*_scenes_manual.json")) or list(BASE.glob("*_scenes.json")) or list(BASE.glob("*scenes*.json"))
     if not js: log(f"❌ {BASE} içinde *scenes*.json yok"); sys.exit(1)
     SOURCE_JSON = js[0]
-    # keyframes klasörü: keyframes_swapped > keyframes
-    KEYFRAMES_SWAPPED_DIR = (BASE/"keyframes_swapped") if (BASE/"keyframes_swapped").exists() else (BASE/"keyframes")
-    KEYFRAMES_ORIG_DIR    = (BASE/"keyframes") if (BASE/"keyframes").exists() else KEYFRAMES_SWAPPED_DIR
+    # keyframes: --keyframes-source / .l2_keyframes_source ile seçilir
+    kf_source = None
+    if "--keyframes-source" in sys.argv:
+        i = sys.argv.index("--keyframes-source")
+        if i + 1 < len(sys.argv):
+            kf_source = sys.argv[i + 1].strip().lower()
+    if kf_source not in ("original", "swapped"):
+        pref = BASE / ".l2_keyframes_source"
+        if pref.exists():
+            kf_source = pref.read_text(encoding="utf-8").strip().lower()
+        else:
+            kf_source = "original"
+    if kf_source == "swapped":
+        KEYFRAMES_SWAPPED_DIR = BASE / "keyframes_swapped"
+        if not KEYFRAMES_SWAPPED_DIR.exists():
+            KEYFRAMES_SWAPPED_DIR = BASE / "keyframes"
+        KEYFRAMES_ORIG_DIR = KEYFRAMES_SWAPPED_DIR  # seçilen kaynak; fallback yok
+    else:
+        KEYFRAMES_ORIG_DIR = BASE / "keyframes"
+        KEYFRAMES_SWAPPED_DIR = KEYFRAMES_ORIG_DIR  # original-only: aynı klasör
     OUTPUT_DIR   = BASE / f"{PROJECT_NAME}_output"
     PROMPTS_JSON = OUTPUT_DIR / "hailuo_prompts_claude.json"
     OVERLAY_JSON = BASE / f"{PROJECT_NAME}_overlay_cues.json"
@@ -99,7 +116,7 @@ def setup_project():
     log(f"📂 Proje: {PROJECT_NAME}")
     log(f"   🎬 video: {VIDEO_PATH.name}")
     log(f"   📄 json : {SOURCE_JSON.name}")
-    log(f"   🖼  keyframes: {KEYFRAMES_SWAPPED_DIR.name}/")
+    log(f"   🖼  keyframes: {KEYFRAMES_SWAPPED_DIR.name}/ (source={kf_source})")
 
 # ─── KARAKTER NORMALİZASYONU (devre dışı — kimlik referanslarla yönetiliyor) ──
 def normalize_char(text: str) -> str:

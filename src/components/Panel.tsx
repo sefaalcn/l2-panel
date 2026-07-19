@@ -14,8 +14,57 @@ type Project = {
   scene_count: number | null;
   version: number | string | null;
   has_keyframes: boolean;
+  has_keyframes_swapped?: boolean;
+  keyframes_source?: "original" | "swapped";
   has_prompts: boolean;
 };
+
+type KeyframesSource = "original" | "swapped";
+
+function FileDrop({
+  label,
+  hint,
+  file,
+  accept,
+  onFile,
+}: {
+  label: string;
+  hint: string;
+  file: File | null;
+  accept: string;
+  onFile: (f: File | null) => void;
+}) {
+  const [over, setOver] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+  return (
+    <div
+      className={`drop drop-sm${over ? " over" : ""}`}
+      onClick={() => ref.current?.click()}
+      onDragEnter={(e) => { e.preventDefault(); setOver(true); }}
+      onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        const f = e.dataTransfer.files?.[0];
+        if (f) onFile(f);
+      }}
+    >
+      <strong>{label}</strong>
+      <span className="hint">{hint}</span>
+      <div className="files">
+        <div>{file ? `✓ ${file.name}` : "dosya seç veya bırak"}</div>
+      </div>
+      <input
+        ref={ref}
+        type="file"
+        accept={accept}
+        style={{ display: "none" }}
+        onChange={(e) => onFile(e.target.files?.[0] || null)}
+      />
+    </div>
+  );
+}
 
 async function jget<T>(u: string): Promise<T> {
   const r = await fetch(u);
@@ -54,14 +103,13 @@ export default function Panel() {
   const [liveTxt, setLiveTxt] = useState("boşta");
   const [liveOn, setLiveOn] = useState(false);
   const [progress, setProgress] = useState<Record<string, unknown> | null>(null);
-  const [dropProject, setDropProject] = useState("");
-  const [dropOver, setDropOver] = useState(false);
   const [dropScenes, setDropScenes] = useState<File | null>(null);
   const [dropZip, setDropZip] = useState<File | null>(null);
   const [dropVideo, setDropVideo] = useState<File | null>(null);
+  const [uploadSource, setUploadSource] = useState<KeyframesSource>("original");
+  const [keyframesSource, setKeyframesSource] = useState<KeyframesSource>("original");
   const [uploadMsg, setUploadMsg] = useState("");
   const [uploading, setUploading] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const model = models[modelKey];
@@ -91,21 +139,25 @@ export default function Panel() {
       return;
     }
     const p = projects.find((x) => x.name === project);
+    if (p?.keyframes_source) setKeyframesSource(p.keyframes_source);
     jget<{
       scenario: string;
       scene_count: number;
       warnings: string[];
+      keyframes_source?: KeyframesSource;
     }>(`/api/project/${encodeURIComponent(project)}/preflight`)
       .then((d) => {
         setScenario(d.scenario);
+        if (d.keyframes_source) setKeyframesSource(d.keyframes_source);
         const scLbl: Record<string, string> = {
           A: "Senaryo A (prompt hazır)",
           B: "Senaryo B (Gemini üretecek)",
           "B-eksik": "Senaryo B — EKSİK (video yok)",
         };
         const w = d.warnings || [];
+        const src = d.keyframes_source === "swapped" ? "swapped" : "original";
         setPreflightTxt(
-          `${d.scene_count} sahne · ${scLbl[d.scenario] || ""}` +
+          `${d.scene_count} sahne · ${scLbl[d.scenario] || ""} · kf=${src}` +
             (w.length ? ` · ⚠ ${w.length} uyarı` : "") +
             (p ? "" : ""),
         );
@@ -125,44 +177,42 @@ export default function Panel() {
     return out;
   }, [model, creds, project, scenario, envSet]);
 
-  function classifyFiles(files: FileList | File[]) {
-    for (const f of Array.from(files)) {
-      const low = f.name.toLowerCase();
-      const guess = f.name
-        .replace(/\.[^.]+$/, "")
-        .replace(/_scenes_manual$/i, "")
-        .replace(/_scenes$/i, "")
-        .replace(/_keyframes$/i, "");
-      if (low.endsWith(".json") && low.includes("scenes")) {
-        setDropScenes(f);
-        setDropProject((p) => p || guess);
-      } else if (low.endsWith(".zip")) {
-        setDropZip(f);
-        setDropProject((p) => p || guess);
-      } else if (/\.(mp4|mov|webm)$/i.test(low)) {
-        setDropVideo(f);
-        setDropProject((p) => p || guess);
-      }
-    }
+  function guessProjectName(f: File) {
+    return f.name
+      .replace(/\.[^.]+$/, "")
+      .replace(/_scenes_manual$/i, "")
+      .replace(/_scenes$/i, "")
+      .replace(/_keyframes_swapped$/i, "")
+      .replace(/_keyframes$/i, "");
   }
 
+  const derivedProject = useMemo(() => {
+    if (dropScenes) return guessProjectName(dropScenes);
+    if (dropZip) return guessProjectName(dropZip);
+    if (dropVideo) return guessProjectName(dropVideo);
+    return "";
+  }, [dropScenes, dropZip, dropVideo]);
+
   async function doUpload() {
-    if (!dropProject.trim() || !dropScenes || !dropZip) return;
+    const name = derivedProject.trim();
+    if (!name || !dropScenes || !dropZip) return;
     setUploading(true);
     setUploadMsg("");
     try {
       const fd = new FormData();
-      fd.append("project", dropProject.trim());
+      fd.append("project", name);
       fd.append("scenes", dropScenes);
       fd.append("keyframes_zip", dropZip);
+      fd.append("keyframes_source", uploadSource);
       if (dropVideo) fd.append("video", dropVideo);
       const r = await fetch("/api/ingest", { method: "POST", body: fd });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || d.error || `HTTP ${r.status}`);
-      setUploadMsg(`✓ ${d.project} yüklendi`);
+      setUploadMsg(`✓ ${d.project} yüklendi (${d.keyframes_source || uploadSource})`);
       setDropScenes(null);
       setDropZip(null);
       setDropVideo(null);
+      setKeyframesSource(uploadSource);
       await loadProjects();
       setProject(d.project);
     } catch (e) {
@@ -232,6 +282,7 @@ export default function Panel() {
       scenes: scenes.trim() || null,
       credentials: creds,
       prompt_optimizer: optimizer,
+      keyframes_source: keyframesSource,
     });
     if (!ok) {
       setStartMsg(`${status}: ${(d as { detail?: string }).detail || "hata"}`);
@@ -248,7 +299,7 @@ export default function Panel() {
     <div className="wrap">
       <header className="top">
         <h1>L2.5 Üretim Paneli</h1>
-        <span className="sub">Next.js · JSON + keyframes sürükle-bırak</span>
+        <span className="sub">Next.js · ayrı alanlar: JSON · keyframes · video</span>
         <span style={{ marginLeft: "auto" }} className="sub">
           <span className="dot" style={{ background: liveOn ? "var(--ok)" : "var(--idle)" }} /> {liveTxt}
         </span>
@@ -260,44 +311,64 @@ export default function Panel() {
 
           <div style={{ marginBottom: 14, paddingBottom: 13, borderBottom: "1px solid var(--border)" }}>
             <div className="section-t" style={{ margin: "0 0 8px" }}>
-              Proje yükle <span style={{ textTransform: "none", fontWeight: 400, color: "var(--muted)" }}>— JSON + ZIP (+ mp4)</span>
+              Proje yükle{" "}
+              <span style={{ textTransform: "none", fontWeight: 400, color: "var(--muted)" }}>
+                — ad JSON/videodan
+              </span>
             </div>
-            <label className="fld" style={{ marginBottom: 8 }}>
-              <span>Proje adı</span>
-              <input value={dropProject} onChange={(e) => setDropProject(e.target.value)} placeholder="örn: ice_cream_truck" />
-            </label>
-            <div
-              className={`drop${dropOver ? " over" : ""}`}
-              onClick={() => fileRef.current?.click()}
-              onDragEnter={(e) => { e.preventDefault(); setDropOver(true); }}
-              onDragOver={(e) => { e.preventDefault(); setDropOver(true); }}
-              onDragLeave={() => setDropOver(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDropOver(false);
-                if (e.dataTransfer.files?.length) classifyFiles(e.dataTransfer.files);
-              }}
-            >
-              <strong>Sürükle-bırak</strong>
-              <span className="hint">*_scenes_manual.json · *_keyframes.zip · isteğe mp4</span>
-              <div className="files">
-                <div>{dropScenes ? `JSON ✓ ${dropScenes.name}` : "JSON ✗"}</div>
-                <div>{dropZip ? `ZIP ✓ ${dropZip.name}` : "ZIP ✗"}</div>
-                <div>{dropVideo ? `Video ✓ ${dropVideo.name}` : "Video — opsiyonel"}</div>
-              </div>
+
+            <div className="section-t" style={{ margin: "0 0 6px" }}>Keyframe kaynağı</div>
+            <div className="seg" role="group" aria-label="Keyframe kaynağı">
+              <button
+                type="button"
+                className={`seg-btn${uploadSource === "original" ? " on" : ""}`}
+                onClick={() => setUploadSource("original")}
+              >
+                Orijinal
+                <small>keyframes/</small>
+              </button>
+              <button
+                type="button"
+                className={`seg-btn${uploadSource === "swapped" ? " on swapped" : ""}`}
+                onClick={() => setUploadSource("swapped")}
+              >
+                Swapped
+                <small>keyframes_swapped/</small>
+              </button>
             </div>
-            <input
-              ref={fileRef}
-              type="file"
-              multiple
-              accept=".json,.zip,.mp4,.mov"
-              style={{ display: "none" }}
-              onChange={(e) => e.target.files && classifyFiles(e.target.files)}
+
+            {derivedProject ? (
+              <div className="derived">Proje: <b>{derivedProject}</b></div>
+            ) : (
+              <div className="hint" style={{ marginBottom: 8 }}>Proje adı JSON (veya ZIP/video) dosya adından alınır.</div>
+            )}
+
+            <FileDrop
+              label="1. Scenes JSON"
+              hint="*_scenes_manual.json"
+              file={dropScenes}
+              accept=".json,application/json"
+              onFile={setDropScenes}
             />
+            <FileDrop
+              label={`2. Keyframes ZIP (${uploadSource === "swapped" ? "swapped" : "orijinal"})`}
+              hint="*.zip — seçilen köke yazılır"
+              file={dropZip}
+              accept=".zip,application/zip"
+              onFile={setDropZip}
+            />
+            <FileDrop
+              label="3. Kaynak video (opsiyonel)"
+              hint="prompt yoksa Gemini için .mp4 / .mov"
+              file={dropVideo}
+              accept=".mp4,.mov,.webm,video/*"
+              onFile={setDropVideo}
+            />
+
             <button
               className="primary"
               style={{ marginTop: 10 }}
-              disabled={uploading || !dropProject.trim() || !dropScenes || !dropZip}
+              disabled={uploading || !derivedProject || !dropScenes || !dropZip}
               onClick={() => void doUpload()}
             >
               {uploading ? "Yükleniyor…" : "Yükle"}
@@ -372,10 +443,36 @@ export default function Panel() {
                 <span className={`badge ${pmeta.has_keyframes ? "b-ok" : "b-err"}`}>
                   keyframes {pmeta.has_keyframes ? "✓" : "✗"}
                 </span>
+                <span className={`badge ${pmeta.has_keyframes_swapped ? "b-ok" : "b-idle"}`}>
+                  swapped {pmeta.has_keyframes_swapped ? "✓" : "—"}
+                </span>
                 <span className={`badge ${pmeta.has_prompts ? "b-ok" : "b-warn"}`}>
                   prompt {pmeta.has_prompts ? "✓" : "üretilecek"}
                 </span>
               </div>
+            )}
+            {project && (
+              <>
+                <div className="section-t" style={{ margin: "12px 0 6px" }}>Koşuda kullanılacak</div>
+                <div className="seg" role="group" aria-label="Koşu keyframe kaynağı">
+                  <button
+                    type="button"
+                    className={`seg-btn${keyframesSource === "original" ? " on" : ""}`}
+                    onClick={() => setKeyframesSource("original")}
+                  >
+                    Orijinal
+                    <small>{pmeta?.has_keyframes ? "hazır" : "yok"}</small>
+                  </button>
+                  <button
+                    type="button"
+                    className={`seg-btn${keyframesSource === "swapped" ? " on swapped" : ""}`}
+                    onClick={() => setKeyframesSource("swapped")}
+                  >
+                    Swapped
+                    <small>{pmeta?.has_keyframes_swapped ? "hazır" : "yok"}</small>
+                  </button>
+                </div>
+              </>
             )}
             {preflightTxt && <div className="hint">{preflightTxt}</div>}
           </label>

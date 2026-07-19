@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { materializeExport } from "@/lib/ingest";
+import { materializeExport, parseKeyframesSource } from "@/lib/ingest";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -20,6 +20,7 @@ export async function POST(req: Request) {
   const scenes = form.get("scenes");
   const zip = form.get("keyframes_zip");
   const video = form.get("video");
+  const keyframesSource = parseKeyframesSource(form.get("keyframes_source"));
   if (!project || !(scenes instanceof File) || !(zip instanceof File)) {
     return NextResponse.json({ detail: "project, scenes, keyframes_zip gerekli" }, { status: 400 });
   }
@@ -39,6 +40,7 @@ export async function POST(req: Request) {
     zipBytes,
     videoBytes,
     videoName,
+    keyframesSource,
   });
 
   return NextResponse.json({
@@ -46,6 +48,7 @@ export async function POST(req: Request) {
     runtime: "local",
     project: info.project,
     path: info.path,
+    keyframes_source: info.keyframes_source,
     has_keyframes: info.has_keyframes,
     video: info.video,
     extracted: info.extracted,

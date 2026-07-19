@@ -84,6 +84,16 @@ def _resolve_duration(scene, model_tag):
 _KNOWN_VIDEO_MODELS = {"hailuo"}
 
 
+def _find_frame(scene_dir: pathlib.Path, which: str) -> pathlib.Path:
+    """frame_first / frame_last — .jpg öncelik, yoksa .png (gemini/hailuo ile aynı)."""
+    base = f"frame_{which}"
+    for ext in (".jpg", ".png"):
+        p = scene_dir / f"{base}{ext}"
+        if p.exists():
+            return p
+    return scene_dir / f"{base}.jpg"  # yoksa beklenen yol (exists() False)
+
+
 def _validate_scene(s, mode, first_img, last_img, model_tag):
     """Fix #2 — dry-run dogrulama. frame_mode<->dosya + video_duration + video_model. Uyari listesi doner."""
     w = []
@@ -310,8 +320,8 @@ def run(cfg: PipelineConfig):
         #   start_only : start=frame_first (gerekli), end=None
         #   end_only   : start=None,        end=frame_last (gerekli, promptReference 2)
         scene_dir = cfg.keyframes_dir / label
-        first_img = scene_dir / "frame_first.jpg"
-        last_img = scene_dir / "frame_last.jpg"
+        first_img = _find_frame(scene_dir, "first")
+        last_img = _find_frame(scene_dir, "last")
         if mode == "end_only":
             start_arg = None
             end_arg = str(last_img) if last_img.exists() else None
@@ -506,8 +516,8 @@ def _run_pool(cfg, scenes, progress):
         adapter_key = router.route(cfg.provider, mode, ordinal, cfg.start_model)
         spec = core.get(adapter_key)
         scene_dir = cfg.keyframes_dir / label
-        first_img = scene_dir / "frame_first.jpg"
-        last_img = scene_dir / "frame_last.jpg"
+        first_img = _find_frame(scene_dir, "first")
+        last_img = _find_frame(scene_dir, "last")
         if mode == "end_only":
             start_arg, end_arg, required = None, (str(last_img) if last_img.exists() else None), last_img
         else:
