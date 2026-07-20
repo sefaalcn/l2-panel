@@ -2,6 +2,7 @@ import { GoogleGenAI } from "@google/genai";
 import fs from "fs";
 import path from "path";
 import type { KeyframesSource } from "@/lib/ingest";
+import { isGeekFree, parseAlternativeScene } from "@/lib/scenes";
 import { genBatch, selfCheck, clip, normalizeChar, MAX_V1, MAX_V2, MAX_V3, uploadOrCache } from "./client";
 import { loadCharRefs, loadSwapFlag } from "./frames";
 import {
@@ -92,20 +93,14 @@ export async function generatePrompts(opts: GeminiRunOptions): Promise<number> {
     }
   }
 
-  const BATCH = 1;
-  for (let i = 0; i < scenes.length; i += BATCH) {
-    const batch = scenes.slice(i, i + BATCH);
-    log(`\n── Batch ${Math.floor(i / BATCH) + 1}: ${batch.map((s) => s.index).join(",")} ──`);
-    let res: Record<string, unknown>[] | null = null;
-    try {
-      res = await genBatch(client, vid, batch, paths, videoContext, charRefs, swapOn);
-    } catch (e) {
-      log(`   ❌ API hatası: ${e}`);
-    }
-    if (!res) {
-      log("   ⚠️ boş yanıt, batch atlandı");
-      continue;
-    }
+  const geekCount = scenes.filter(isGeekFree).length;
+  if (geekCount) log(`🎭 GEEKFREE sahneler: ${geekCount} (tek-sahne cartoon geek geçişi)`);
+
+  const normalScenes = scenes.filter((s) => !isGeekFree(s));
+  const geekScenes = scenes.filter(isGeekFree);
+
+  async function applyBatch(batch: typeof scenes, res: Record<string, unknown>[] | null) {
+    if (!res) return false;
 
     const rmap: Record<number, Record<string, unknown>> = {};
     for (const r of res) {
@@ -141,11 +136,15 @@ export async function generatePrompts(opts: GeminiRunOptions): Promise<number> {
         v3: clip(normalizeChar(String(r.v3 || "")), MAX_V3, true, Boolean(faceVis)),
         emotion: r.emotion || "",
         face_visible: faceVis,
-        source: "gemini_direct_ts",
+        source: isGeekFree(s) ? "gemini_geekfree_ts" : "gemini_direct_ts",
         video_duration: vdurByIdx[idx],
         video_model: vmodelByIdx[idx],
         alternative_scene: altByIdx[idx],
       };
+
+      const alt = parseAlternativeScene(altByIdx[idx] ?? s.alternative_scene);
+      if (alt < 2) entry.v2 = "";
+      if (alt < 3) entry.v3 = "";
 
       if (SELF_CHECK) {
         const checked = await selfCheck(client, entry, Boolean(faceVis), videoChars);
@@ -185,14 +184,50 @@ export async function generatePrompts(opts: GeminiRunOptions): Promise<number> {
           scene_label: labelByIdx[idx],
         });
       }
-      log(`   ✅ ${String(idx).padStart(3, "0")} [${entry.emotion}]`);
+      log(`   ✅ ${String(idx).padStart(3, "0")} [${entry.emotion}]${isGeekFree(s) ? " 🎭 geek" : ""}`);
+    }
+    return true;
+  }
+
+  const BATCH = 1;
+  for (let i = 0; i < normalScenes.length; i += BATCH) {
+    const batch = normalScenes.slice(i, i + BATCH);
+    log(`\n── Batch ${Math.floor(i / BATCH) + 1}: ${batch.map((s) => s.index).join(",")} ──`);
+    let res: Record<string, unknown>[] | null = null;
+    try {
+      res = await genBatch(client, vid, batch, paths, videoContext, charRefs, swapOn, false);
+    } catch (e) {
+      log(`   ❌ API hatası: ${e}`);
+    }
+    if (!(await applyBatch(batch, res))) {
+      log("   ⚠️ boş yanıt, batch atlandı");
     }
 
     const out = Object.values(existing).sort(
       (a, b) => (a.index as number) - (b.index as number),
     );
     fs.writeFileSync(paths.promptsJson, JSON.stringify(out, null, 2), "utf8");
-    if (i + BATCH < scenes.length) await new Promise((r) => setTimeout(r, 3000));
+    if (i + BATCH < normalScenes.length) await new Promise((r) => setTimeout(r, 3000));
+  }
+
+  for (let i = 0; i < geekScenes.length; i++) {
+    const batch = [geekScenes[i]];
+    log(`\n── GEEKFREE ${Math.floor(i) + 1}/${geekScenes.length}: sahne ${batch[0].index} (yalnız bu kesit) ──`);
+    let res: Record<string, unknown>[] | null = null;
+    try {
+      res = await genBatch(client, vid, batch, paths, videoContext, charRefs, swapOn, true);
+    } catch (e) {
+      log(`   ❌ GEEKFREE API hatası: ${e}`);
+    }
+    if (!(await applyBatch(batch, res))) {
+      log("   ⚠️ GEEKFREE boş yanıt, sahne atlandı");
+    }
+
+    const out = Object.values(existing).sort(
+      (a, b) => (a.index as number) - (b.index as number),
+    );
+    fs.writeFileSync(paths.promptsJson, JSON.stringify(out, null, 2), "utf8");
+    if (i + 1 < geekScenes.length) await new Promise((r) => setTimeout(r, 3000));
   }
 
   const out = Object.values(existing).sort((a, b) => (a.index as number) - (b.index as number));
@@ -210,7 +245,7 @@ export async function generatePrompts(opts: GeminiRunOptions): Promise<number> {
     ...out
       .filter((p) => (p.index as number) >= lo && (p.index as number) <= hi)
       .flatMap((p) => [
-        `\n--- Scene ${String(p.index).padStart(3, "0")} [${p.frame_mode}] ---`,
+        `\n--- Scene ${String(p.index).padStart(3, "0")} [${p.frame_mode}]${p.geekfree ? " GEEKFREE" : ""} ---`,
         `V1: ${p.v1}`,
         `V2: ${p.v2}`,
         `V3: ${p.v3}`,

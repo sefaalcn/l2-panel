@@ -120,3 +120,53 @@ ul.list li { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; bor
 .drop .files { margin-top: 8px; text-align: left; font-size: 12px; color: var(--text); }
 .drop .files div { padding: 2px 0; font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
 .actions { display: flex; gap: 10px; margin-top: 16px; }
+
+.collapse-fld { margin-bottom: 10px; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; background: var(--inset); }
+.collapse-hd {
+  width: 100%; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 9px 11px; border: 0; background: transparent; color: var(--text);
+  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; text-align: left;
+}
+.collapse-hd:hover { background: var(--surface-2); }
+.collapse-hd .collapse-title { flex: 1; min-width: 0; }
+.collapse-hd .collapse-chevron { color: var(--muted); font-size: 11px; margin-left: auto; }
+.collapse-bd { padding: 0 11px 11px; border-top: 1px solid var(--border); background: var(--surface); }
+.collapse-bd input, .collapse-bd textarea { margin-top: 8px; }
+.collapse-opt { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; color: var(--muted); }
+.collapse-opt input { width: auto; margin: 0; }
+
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(8, 14, 22, .45); z-index: 100;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.modal {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow); max-width: 420px; width: 100%; padding: 18px 18px 16px;
+}
+.modal h3 { margin: 0 0 14px; font-size: 15px; font-weight: 650; }
+.modal-dl { margin: 0 0 16px; }
+.modal-dl div { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.modal-dl dt { color: var(--muted); font-weight: 550; }
+.modal-dl dd { margin: 0; text-align: right; font-weight: 600; word-break: break-word; }
+.modal-actions { display: flex; gap: 10px; }
+.modal-actions button { flex: 1; padding: 10px; border-radius: 9px; font: inherit; font-weight: 650; cursor: pointer; }
+.modal-actions .modal-cancel { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); }
+.modal-actions .modal-confirm { background: var(--accent); border: 0; color: #fff; }
+.modal-actions .modal-confirm:hover { background: var(--accent-ink); }
+.out-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.out-actions { display: flex; gap: 8px; align-items: center; }
+button.ghost.sm, a.ghost.sm.link-btn, a.ghost.sm.dl-btn {
+  font-size: 12px; padding: 5px 10px; border-radius: 7px; text-decoration: none; display: inline-block;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--accent-ink); font-weight: 600; cursor: pointer;
+}
+button.ghost.sm:disabled { opacity: .5; cursor: not-allowed; }
+a.dl-btn { white-space: nowrap; }
+.out-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }
+.out-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 0; border-bottom: 1px solid var(--border);
+}
+.out-row:last-child { border-bottom: 0; }
+.out-meta { min-width: 0; flex: 1; }
+.out-name { display: block; font-size: 12.5px; font-weight: 600; word-break: break-all; }
+.out-sub { color: var(--muted); font-size: 11px; }

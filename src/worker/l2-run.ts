@@ -7,6 +7,7 @@
  *   npx tsx src/worker/l2-run.ts --project-path ./projects/foo --log ./projects/foo/.l2_run.log
  */
 import { parseKeyframesSource } from "../lib/ingest";
+import { enrichEnvFromKeyFiles } from "../lib/api-keys";
 import { runPipeline } from "../lib/pipeline/orchestrator";
 import type { RunOptions } from "../lib/pipeline/types";
 
@@ -42,6 +43,7 @@ function parseArgs(argv: string[]) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  enrichEnvFromKeyFiles(opts.env);
 
   process.on("SIGTERM", () => {
     process.exit(143);

@@ -7,6 +7,12 @@ import {
   readKeyframesSource,
   type KeyframesSource,
 } from "./ingest";
+import { buildScenePlan, loadProjectScenes, projectNeedsGemini, scenesHaveDescriptions } from "./scenes";
+import {
+  normalizeVideoModel,
+  projectHasFireflyScenes,
+  sceneUsesFirefly,
+} from "./video-model";
 
 export type ProjectSummary = {
   name: string;
@@ -117,6 +123,9 @@ export function preflight(name: string, sourceOverride?: KeyframesSource | null)
       has_video: s.has_video,
       keyframes_source: source,
       scenario: "B-eksik" as const,
+      scene_plan: [],
+      variants_summary: "—",
+      total_videos: 0,
     };
   }
   const raw = JSON.parse(fs.readFileSync(path.join(dir, scenesName), "utf8"));
@@ -127,14 +136,20 @@ export function preflight(name: string, sourceOverride?: KeyframesSource | null)
       `${kfRoot}/ boş veya yok — keyframes ZIP yükle (kaynak: ${source})`,
     );
   }
+  const scenes = loadProjectScenes(name);
   let scenario: "A" | "B" | "B-eksik";
-  if (s.has_prompts) scenario = "A";
-  else if (s.has_video) {
+  const hasDescriptions = scenesHaveDescriptions(scenes);
+  if (hasDescriptions) {
+    scenario = "A";
+    if (projectNeedsGemini(scenes)) {
+      warnings.push("Senaryo A — scene_description hazır; alt≥2 / geekfree sahneler için Gemini kullanılacak");
+    }
+  } else if (s.has_video) {
     scenario = "B";
-    warnings.push("prompt YOK → gemini_direct üretecek (kaynak video ✓)");
+    warnings.push("scene_description eksik → Gemini videodan prompt üretecek");
   } else {
     scenario = "B-eksik";
-    warnings.push("prompt YOK ve kaynak video (.mp4) YOK → prompt üretilemez");
+    warnings.push("scene_description ve kaynak video yok → üretilemez");
   }
   for (const scene of sc) {
     const mode = String(scene.frame_mode || "both");
@@ -152,13 +167,26 @@ export function preflight(name: string, sourceOverride?: KeyframesSource | null)
       warnings.push(`${label}: frame_mode=${mode} ama frame_last.(jpg|png) YOK [${kfRoot}]`);
     }
   }
+  const plan = buildScenePlan(scenes);
+  const fireflyScenes = scenes.filter(sceneUsesFirefly);
   return {
     name,
     scene_count: sc.length,
-    prompts_ready: s.has_prompts,
+    prompts_ready: hasDescriptions,
+    needs_gemini: projectNeedsGemini(scenes),
+    has_firefly_scenes: projectHasFireflyScenes(scenes),
+    firefly_scene_count: fireflyScenes.length,
+    firefly_models: [
+      ...new Set(
+        fireflyScenes.map((s) => normalizeVideoModel(s.video_model)).filter(Boolean),
+      ),
+    ],
     has_video: s.has_video,
     keyframes_source: source,
     scenario,
     warnings: warnings.slice(0, 30),
+    scene_plan: plan.scenes,
+    variants_summary: plan.variants_summary,
+    total_videos: plan.total_videos,
   };
 }

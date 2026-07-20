@@ -24,8 +24,14 @@ export function readRunstate(): RunState | null {
 
 export function writeRunstate(d: RunState) {
   fs.mkdirSync(PANEL_DIR, { recursive: true });
+  const prev = readRunstate() || {};
+  const merged: RunState = {
+    ...prev,
+    ...d,
+    updated_at: Date.now() / 1000,
+  };
   const tmp = `${RUNSTATE_PATH}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(d, null, 2), "utf8");
+  fs.writeFileSync(tmp, JSON.stringify(merged, null, 2), "utf8");
   fs.renameSync(tmp, RUNSTATE_PATH);
 }
 
@@ -55,7 +61,16 @@ export function activeRun(): RunState | null {
 }
 
 export function cleanCredFiles() {
-  for (const name of [".l2_token.txt", ".l2_cookie.txt", ".l2_project.txt"]) {
+  for (const name of [
+    ".l2_token.txt",
+    ".l2_cookie.txt",
+    ".l2_project.txt",
+    ".l2_ff_token.txt",
+    ".l2_ff_arp.txt",
+    ".l2_ff_nonce.txt",
+    ".l2_gemini_api_key.txt",
+    ".l2_anthropic_api_key.txt",
+  ]) {
     try {
       fs.unlinkSync(path.join(PANEL_DIR, name));
     } catch {

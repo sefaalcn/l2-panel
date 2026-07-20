@@ -13,6 +13,7 @@ export type JobResult = {
 export type PoolJob = Job & {
   _spec?: AdapterSpec;
   _mode?: string;
+  _provider?: "hailuo" | "firefly";
   outName?: string;
   submitMeta?: Record<string, unknown>;
 };

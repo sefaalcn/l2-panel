@@ -5,6 +5,7 @@ import { encodeImage, findFramePair } from "./frames";
 import { getSelfCheckInstruction, getSystemPrompt, GEMINI_MODEL } from "./prompts";
 import type { ProjectPaths, SceneRow } from "./project";
 import { log } from "./project";
+import { isGeekFree, sceneMainTopic } from "@/lib/scenes";
 import { clip, fmtTime, MAX_V1, MAX_V2, MAX_V3, normalizeChar, parseJsonArray } from "./text";
 
 type Part =
@@ -78,6 +79,7 @@ async function buildParts(
   swapOn: boolean,
   withImages: boolean,
   soften: boolean,
+  geekFree = false,
 ): Promise<Part[]> {
   const parts: Part[] = [];
   if (vid.uri && vid.mimeType) {
@@ -85,12 +87,25 @@ async function buildParts(
   }
 
   let intro =
-    "VIDEO CONTEXT (what this whole video is about — use it to judge each scene's role, tone and " +
-    "which character is which):\n" +
-    (videoContext.trim() || "(no context provided)") +
-    "\n\nWatch these scenes and write v1/v2/v3 for each, in the optimizer-friendly single-action " +
-    "cinematic style. Honor each user note's intent and specific verbs, take the real motion from " +
-    "the video. Use the context above to get the EMOTION and STORY ROLE of each scene right.";
+    geekFree
+      ? "GEEKFREE MODE — watch ONLY the scene(s) below (their time range). " +
+        "Maximum child-friendly CARTOON GEEK is REQUIRED:\n" +
+        "  • v1 = clean optimizer action (same rules as normal)\n" +
+        "  • v2 = MUST include ONE in-frame symbol (Zzz, !, heart, sparkle, sweat drop, " +
+        "sound-wave, thought bubble…) matching scene_main_topic / emotion\n" +
+        "  • v3 = MUST include ONE strong cartoon acting gag woven into the motion\n" +
+        "Pick symbols from the verb→effect pool (sleep→Zzz, surprise→!, confuse→?, love→heart, " +
+        "shout→sound-waves, idea→light-bulb, stress→sweat).\n\n"
+      : "VIDEO CONTEXT (what this whole video is about — use it to judge each scene's role, tone and " +
+        "which character is which):\n" +
+        (videoContext.trim() || "(no context provided)") +
+        "\n\nWatch these scenes and write v1/v2/v3 for each, in the optimizer-friendly single-action " +
+        "cinematic style. Honor each user note's intent and specific verbs, take the real motion from " +
+        "the video. Use the context above to get the EMOTION and STORY ROLE of each scene right.";
+
+  if (geekFree && videoContext.trim()) {
+    intro += "VIDEO CONTEXT (story/tone reference):\n" + videoContext.trim() + "\n\n";
+  }
 
   if (soften) {
     intro +=
@@ -135,6 +150,13 @@ async function buildParts(
     const ftype: "first" | "last" = fm === "end_only" ? "last" : "first";
     let noteLine = note;
     if (soften) noteLine += "  (render this emotion in a gentle, child-friendly, cartoonish way)";
+    const topic = sceneMainTopic(s);
+    if (isGeekFree(s)) {
+      noteLine +=
+        `\n  [GEEKFREE=true — cartoon geek ZORUNLU; scene_main_topic: "${topic || "(scene_description'dan çıkar)"}"]`;
+    } else if (topic) {
+      noteLine += `\n  scene_main_topic: "${topic}"`;
+    }
     parts.push({
       text: `\nSCENE ${String(s.index).padStart(3, "0")} [${fmtTime(Number(st))}→${fmtTime(Number(en))}] [frame_mode: ${fm}]\n  user note (intent): "${noteLine}"`,
     });
@@ -181,6 +203,7 @@ export async function genBatch(
   videoContext: string,
   charRefs: { name: string; data: Buffer }[],
   swapOn: boolean,
+  geekFree = false,
 ): Promise<Record<string, unknown>[] | null> {
   let lastErr: unknown = null;
   const modes: [boolean, boolean, string][] = [
@@ -201,6 +224,7 @@ export async function genBatch(
           swapOn,
           withImages,
           soften,
+          geekFree,
         );
         const resp = await client.models.generateContent({
           model: GEMINI_MODEL,
@@ -239,6 +263,144 @@ export async function genBatch(
   }
   if (lastErr) throw lastErr;
   return null;
+}
+
+const ALT_V1_SYSTEM =
+  "You are a Hailuo I2V prompt engineer. The user already has a base prompt (v1) from scene_description. " +
+  "Watch ONLY the scene time range provided. Write ONE alternate English Hailuo prompt (v2) — same action and intent, " +
+  "different cinematic wording. Start with a Hailuo camera bracket tag. ONE continuous motion. ≤460 chars. " +
+  'Return ONLY JSON: {"v2":"..."}';
+
+const GEEK_SYSTEM =
+  "You are a cartoon geek effect writer for Hailuo I2V. Watch ONLY this scene's time range. " +
+  "Write an English ADDON snippet (not a full prompt) with child-friendly cartoon geek: " +
+  "in-frame symbols (Zzz, !, heart, sparkle, sweat…) + one acting gag gesture. " +
+  "This text will be APPENDED to the base prompt. ≤220 chars. " +
+  'Return ONLY JSON: {"geek":"..."}';
+
+async function genSingleSceneJson(
+  client: GoogleGenAI,
+  vid: UploadedFile,
+  scene: SceneRow,
+  paths: ProjectPaths,
+  videoContext: string,
+  charRefs: { name: string; data: Buffer }[],
+  swapOn: boolean,
+  systemInstruction: string,
+  userIntro: string,
+  resultKey: "v2" | "geek",
+): Promise<string | null> {
+  const parts: Part[] = [];
+  if (vid.uri && vid.mimeType) {
+    parts.push({ fileData: { fileUri: vid.uri, mimeType: vid.mimeType } });
+  }
+  parts.push({ text: userIntro });
+
+  const s = scene;
+  const note = normalizeChar(String(s.scene_description || "").trim());
+  const fs_ = s.frame_first_seek as number | undefined;
+  const ls = s.frame_last_seek as number | undefined;
+  const st = fs_ ?? ls ?? 0;
+  const en = ls ?? fs_ ?? 0;
+  const fm = String(s.frame_mode || "both");
+  const label = String(s.label || `scene_${String(s.index).padStart(3, "0")}`);
+  const ftype: "first" | "last" = fm === "end_only" ? "last" : "first";
+
+  parts.push({
+    text:
+      `\nSCENE ${String(s.index).padStart(3, "0")} [${fmtTime(Number(st))}→${fmtTime(Number(en))}] [frame_mode: ${fm}]\n` +
+      `  scene_description: "${note}"`,
+  });
+
+  const { swap: fpSwap } = findFramePair(paths, label, ftype, swapOn);
+  if (fpSwap) {
+    const b64 = await encodeImage(fpSwap);
+    if (b64) {
+      parts.push({ text: "  START frame:" });
+      parts.push({ inlineData: { data: b64.toString("base64"), mimeType: "image/jpeg" } });
+    }
+  }
+  parts.push({ text: `\nReturn ONLY JSON with "${resultKey}" field.` });
+
+  const resp = await client.models.generateContent({
+    model: GEMINI_MODEL,
+    contents: [{ role: "user", parts }],
+    config: {
+      systemInstruction,
+      temperature: 0.4,
+      maxOutputTokens: 4000,
+      safetySettings: SAFETY,
+      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+    },
+  });
+  const raw = resp.text;
+  if (!raw) return null;
+  const m = raw.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  const parsed = JSON.parse(m[0]) as Record<string, string>;
+  const val = String(parsed[resultKey] || "").trim();
+  return val || null;
+}
+
+export async function genAltV1(
+  client: GoogleGenAI,
+  vid: UploadedFile,
+  scene: SceneRow,
+  paths: ProjectPaths,
+  videoContext: string,
+  charRefs: { name: string; data: Buffer }[],
+  swapOn: boolean,
+  basePrompt: string,
+): Promise<string | null> {
+  const intro =
+    "Watch ONLY this scene. The base prompt (v1) is already set from scene_description:\n" +
+    `"${basePrompt.slice(0, 500)}"\n\n` +
+    (videoContext.trim() ? `Context:\n${videoContext.trim().slice(0, 600)}\n\n` : "") +
+    "Write v2 — an alternate Hailuo prompt for the SAME action.";
+  const v2 = await genSingleSceneJson(
+    client,
+    vid,
+    scene,
+    paths,
+    videoContext,
+    charRefs,
+    swapOn,
+    ALT_V1_SYSTEM,
+    intro,
+    "v2",
+  );
+  return v2 ? clip(normalizeChar(v2), MAX_V1, true, true) : null;
+}
+
+export async function genGeekAddon(
+  client: GoogleGenAI,
+  vid: UploadedFile,
+  scene: SceneRow,
+  paths: ProjectPaths,
+  videoContext: string,
+  charRefs: { name: string; data: Buffer }[],
+  swapOn: boolean,
+  basePrompt: string,
+  mainTopic: string,
+): Promise<string | null> {
+  const intro =
+    "GEEKFREE — watch ONLY this scene time range.\n" +
+    `Base prompt (will be sent as-is + your geek addon):\n"${basePrompt.slice(0, 500)}"\n` +
+    (mainTopic ? `scene_main_topic: "${mainTopic}"\n` : "") +
+    "Write the geek addon to append for maximum cartoon geek effect.";
+  const geek = await genSingleSceneJson(
+    client,
+    vid,
+    scene,
+    paths,
+    videoContext,
+    charRefs,
+    swapOn,
+    GEEK_SYSTEM,
+    intro,
+    "geek",
+  );
+  return geek ? clip(normalizeChar(geek), 220, false, true) : null;
 }
 
 export async function selfCheck(

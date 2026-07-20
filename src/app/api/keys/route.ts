@@ -1,18 +1,24 @@
 import { NextResponse } from "next/server";
+import { API_KEY_NAMES, apiKeyIsSet, saveApiKeyFile } from "@/lib/api-keys";
 import { sessionKeys } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   const body = (await req.json()) as Record<string, string | null | undefined>;
-  for (const k of ["GEMINI_API_KEY", "ANTHROPIC_API_KEY"] as const) {
+  for (const k of API_KEY_NAMES) {
     if (!(k in body)) continue;
-    const v = (body[k] || "").trim();
-    if (v) sessionKeys[k] = v;
-    else delete sessionKeys[k];
+    const v = String(body[k] || "").trim();
+    if (v) {
+      sessionKeys[k] = v;
+      saveApiKeyFile(k, v);
+    } else {
+      delete sessionKeys[k];
+      saveApiKeyFile(k, "");
+    }
   }
   return NextResponse.json({
-    GEMINI_API_KEY: Boolean(sessionKeys.GEMINI_API_KEY || process.env.GEMINI_API_KEY?.trim()),
-    ANTHROPIC_API_KEY: Boolean(sessionKeys.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY?.trim()),
+    GEMINI_API_KEY: apiKeyIsSet("GEMINI_API_KEY"),
+    ANTHROPIC_API_KEY: apiKeyIsSet("ANTHROPIC_API_KEY"),
   });
 }

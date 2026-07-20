@@ -2,6 +2,8 @@
 hailuo_token.txt
 hailuo_cookie.txt
 hailuo_project.txt
+gemini_api_key.txt
+anthropic_api_key.txt
 firefly_token.txt
 firefly_arp.txt
 firefly_nonce.txt

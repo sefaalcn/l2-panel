@@ -11,17 +11,13 @@ export const API_KEY = "clio-playground-web";
 const POLL_INTERVAL = 5_000;
 const POLL_TIMEOUT = 600_000;
 
-class HttpError extends Error {
-  constructor(
-    message: string,
-    public status: number,
-  ) {
-    super(message);
-    this.name = "HttpError";
-  }
+function pathFromEnv(envKey: string, defaultName: string): string {
+  const fromEnv = process.env[envKey];
+  if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
+  return path.join(CODE_ROOT, defaultName);
 }
 
-/** firefly_gen._read / core.read_optional — kod kökünde metin dosyası */
+/** firefly_gen._read / core.read_optional — env dosyası veya kod kökü */
 export function readOptional(name: string): string | null {
   const p = path.isAbsolute(name) ? name : path.join(CODE_ROOT, name);
   try {
@@ -33,9 +29,15 @@ export function readOptional(name: string): string | null {
 }
 
 export function loadToken(): string {
-  const token = readOptional("firefly_token.txt");
-  if (!token) throw new Error("firefly_token.txt bulunamadı/boş (F12'den yenile).");
-  return token.replace("Bearer ", "").trim();
+  const p = pathFromEnv("FIREFLY_TOKEN_FILE", "firefly_token.txt");
+  let token: string | null = null;
+  try {
+    token = fs.readFileSync(p, "utf8").trim();
+  } catch {
+    token = readOptional("firefly_token.txt");
+  }
+  if (!token) throw new Error("Firefly token yok — panelde ff_token girin veya firefly_token.txt");
+  return token.replace(/^Bearer\s+/i, "").trim();
 }
 
 export function baseHeaders(): Record<string, string> {
@@ -49,11 +51,33 @@ export function baseHeaders(): Record<string, string> {
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
     "x-api-key": API_KEY,
   };
-  const arp = readOptional("firefly_arp.txt");
-  if (arp) h["x-arp-session-id"] = arp;
-  const nonce = readOptional("firefly_nonce.txt");
-  if (nonce) h["x-nonce"] = nonce;
+  const arpPath = pathFromEnv("FIREFLY_ARP_FILE", "firefly_arp.txt");
+  try {
+    const arp = fs.readFileSync(arpPath, "utf8").trim();
+    if (arp) h["x-arp-session-id"] = arp;
+  } catch {
+    const arp = readOptional("firefly_arp.txt");
+    if (arp) h["x-arp-session-id"] = arp;
+  }
+  const noncePath = pathFromEnv("FIREFLY_NONCE_FILE", "firefly_nonce.txt");
+  try {
+    const nonce = fs.readFileSync(noncePath, "utf8").trim();
+    if (nonce) h["x-nonce"] = nonce;
+  } catch {
+    const nonce = readOptional("firefly_nonce.txt");
+    if (nonce) h["x-nonce"] = nonce;
+  }
   return h;
+}
+
+class HttpError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+  ) {
+    super(message);
+    this.name = "HttpError";
+  }
 }
 
 function guessContentType(imagePath: string): string {

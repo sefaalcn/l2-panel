@@ -17,7 +17,7 @@ Gereksinim: Node 18+, PATH'te **ffmpeg** (video sıkıştırma için).
 npm run dev
 ```
 
-http://127.0.0.1:8751
+http://127.0.0.1:3000
 
 ## Kullanım
 

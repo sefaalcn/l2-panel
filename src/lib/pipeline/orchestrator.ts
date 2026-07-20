@@ -1,11 +1,19 @@
 import fs from "fs";
 import path from "path";
+import { cleanStagedApiKeyFiles, resolveApiKey } from "@/lib/api-keys";
 import { KEYFRAMES_SOURCE_FILE } from "@/lib/ingest";
 import { writeRunstate } from "@/lib/runstate";
 import { getPipelineEngine } from "./engines";
 import type { RunOptions, RunPhase } from "./types";
 
-const CRED_ENV_VARS = ["HAILUO_TOKEN_FILE", "HAILUO_COOKIE_FILE", "HAILUO_PROJECT_FILE"] as const;
+const CRED_ENV_VARS = [
+  "HAILUO_TOKEN_FILE",
+  "HAILUO_COOKIE_FILE",
+  "HAILUO_PROJECT_FILE",
+  "FIREFLY_TOKEN_FILE",
+  "FIREFLY_ARP_FILE",
+  "FIREFLY_NONCE_FILE",
+] as const;
 
 function updateRunstate(phase: RunPhase, extra: Record<string, unknown> = {}) {
   writeRunstate({
@@ -28,10 +36,6 @@ export function cleanupCredentialFiles(env: NodeJS.ProcessEnv) {
   }
 }
 
-function promptsPath(projectPath: string, projectName: string): string {
-  return path.join(projectPath, `${projectName}_output`, "hailuo_prompts_claude.json");
-}
-
 export async function runPipeline(opts: RunOptions): Promise<number> {
   const projectName = path.basename(opts.projectPath);
   const engine = getPipelineEngine();
@@ -49,16 +53,18 @@ export async function runPipeline(opts: RunOptions): Promise<number> {
   let exitCode = 0;
 
   try {
-    updateRunstate("basliyor", { project: projectName, started_at: Date.now() / 1000 });
+    updateRunstate("basliyor", { project: projectName, provider: opts.provider, started_at: Date.now() / 1000 });
 
-    const prompts = promptsPath(opts.projectPath, projectName);
-    if (!fs.existsSync(prompts)) {
-      updateRunstate("prompt_uretiliyor", { project: projectName });
-      const rc = await engine.runPromptGeneration(opts, projectName);
-      if (rc !== 0) {
-        updateRunstate("hata", { project: projectName, error: `prompt rc=${rc}` });
-        return rc;
-      }
+    updateRunstate("prompt_uretiliyor", { project: projectName });
+    const rcPrompt = await engine.runPromptGeneration(opts, projectName);
+    if (rcPrompt !== 0) {
+      const hint =
+        rcPrompt === 1 && !resolveApiKey("GEMINI_API_KEY", opts.env)
+          ? "GEMINI_API_KEY worker'a ulaşmadı — panelde anahtarı yapıştırıp tekrar deneyin"
+          : `prompt üretimi başarısız (rc=${rcPrompt})`;
+      fs.appendFileSync(opts.logPath, `\n❌ ${hint}\n`, "utf8");
+      updateRunstate("hata", { project: projectName, error: hint });
+      return rcPrompt;
     }
 
     updateRunstate("video_uretiliyor", { project: projectName });
@@ -73,5 +79,6 @@ export async function runPipeline(opts: RunOptions): Promise<number> {
     return 1;
   } finally {
     cleanupCredentialFiles(opts.env);
+    cleanStagedApiKeyFiles();
   }
 }

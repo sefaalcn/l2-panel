@@ -1,5 +1,7 @@
 import fs from "fs";
 import path from "path";
+import { sceneVariantKeys, loadProjectScenes, isGeekFree } from "@/lib/scenes";
+import { routeScene, sceneUsesFirefly } from "@/lib/video-model";
 import {
   type AdapterSpec,
   type Job,
@@ -12,7 +14,6 @@ import "./adapters";
 import * as moderation from "./moderation";
 import { Pool, type PoolJob } from "./pool";
 import { loadProgress, saveProgress, ProgressStore } from "./progress";
-import { route } from "./router";
 
 export type PipelineConfig = {
   provider: string;
@@ -21,6 +22,9 @@ export type PipelineConfig = {
   videoDir: string;
   sink: OutputSink;
   progressFile: string;
+  /** Hailuo koşusunda video_model≠hailuo sahneler için ayrı sink/progress */
+  hybridSinks?: Partial<Record<"hailuo" | "firefly", OutputSink>>;
+  hybridProgressFiles?: Partial<Record<"hailuo" | "firefly", string>>;
   variants: string[];
   startModel?: string;
   scenesFilter?: Set<number> | null;
@@ -30,6 +34,16 @@ export type PipelineConfig = {
   env?: NodeJS.ProcessEnv;
   log?: (msg: string) => void;
 };
+
+type ProviderKey = "hailuo" | "firefly";
+
+function sceneSink(cfg: PipelineConfig, provider: ProviderKey): OutputSink {
+  return cfg.hybridSinks?.[provider] ?? cfg.sink;
+}
+
+function sceneProgressFile(cfg: PipelineConfig, provider: ProviderKey): string {
+  return cfg.hybridProgressFiles?.[provider] ?? cfg.progressFile;
+}
 
 type Tally = {
   produced: number;
@@ -121,6 +135,7 @@ async function generateGuarded(
   job: Job,
   cfg: PipelineConfig,
   mode: string,
+  sceneProvider: ProviderKey,
 ): Promise<[string, AdapterSpec, Record<string, unknown>]> {
   const env = cfg.env ?? process.env;
   const log = cfg.log ?? console.log;
@@ -174,7 +189,7 @@ async function generateGuarded(
   }
 
   // model fallback (YALNIZ Firefly start_only: kling<->runway)
-  if (cfg.provider === "firefly" && mode === "start_only") {
+  if (sceneProvider === "firefly" && mode === "start_only") {
     const fbKey = FIREFLY_FALLBACK[spec.modelTag];
     if (fbKey) {
       let fb: AdapterSpec | null = null;
@@ -220,6 +235,19 @@ function summary(cfg: PipelineConfig, tally: Tally, byModel: Record<string, numb
   log("=".repeat(64));
 }
 
+function resolveVariantPrompt(s: SceneRecord, variant: string): string | null {
+  if (variant === "v3") {
+    const stored = String(s.v3 || "").trim();
+    if (stored) return stored;
+    const base = String(s.v1 || "").trim();
+    const geek = String(s.geek || "").trim();
+    if (base && geek) return `${base} ${geek}`.trim();
+    return null;
+  }
+  const p = s[variant];
+  return typeof p === "string" && p.trim() ? p.trim() : null;
+}
+
 export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
   const log = cfg.log ?? console.log;
   if (!fs.existsSync(cfg.promptsJson)) {
@@ -228,20 +256,56 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
 
   const scenes = JSON.parse(fs.readFileSync(cfg.promptsJson, "utf8")) as SceneRecord[];
   scenes.sort((a, b) => Number(a.index ?? 0) - Number(b.index ?? 0));
-  let progress = loadProgress(cfg.progressFile);
+  const manual = loadProjectScenes(path.basename(cfg.videoDir));
+  const altByIdx: Record<number, unknown> = {};
+  const geekByIdx: Record<number, boolean> = {};
+  const vmodelByIdx: Record<number, unknown> = {};
+  for (const m of manual) {
+    const idx = Number(m.index ?? 0);
+    altByIdx[idx] = m.alternative_scene;
+    if (isGeekFree(m)) geekByIdx[idx] = true;
+    if (m.video_model != null && String(m.video_model).trim()) {
+      vmodelByIdx[idx] = m.video_model;
+    }
+  }
+  for (const s of scenes) {
+    const idx = Number(s.index ?? 0);
+    if (s.alternative_scene == null && altByIdx[idx] != null) {
+      s.alternative_scene = altByIdx[idx] as number;
+    }
+    if (s.geekfree == null && geekByIdx[idx]) {
+      s.geekfree = true;
+    }
+    if ((s.video_model == null || s.video_model === "") && vmodelByIdx[idx] != null) {
+      s.video_model = vmodelByIdx[idx];
+    }
+  }
+
+  const hybridFirefly = cfg.provider === "hailuo" && scenes.some((s) => sceneUsesFirefly(s));
+  const progressByProvider: Record<ProviderKey, Record<string, Record<string, unknown>>> = {
+    hailuo: loadProgress(sceneProgressFile(cfg, "hailuo")),
+    firefly: hybridFirefly ? loadProgress(sceneProgressFile(cfg, "firefly")) : {},
+  };
+  const saveProviderProgress = (provider: ProviderKey) => {
+    saveProgress(sceneProgressFile(cfg, provider), progressByProvider[provider]);
+  };
 
   const modeTag = cfg.dryRun ? "DRY-RUN (kredi harcanmaz)" : "GERÇEK ÜRETİM";
   log("=".repeat(64));
-  log(`  ${cfg.provider.toUpperCase()} PIPELINE — ${modeTag}`);
+  log(`  ${cfg.provider.toUpperCase()} PIPELINE — ${modeTag}${hybridFirefly ? " (+ Firefly sahneler)" : ""}`);
   log(`  varyantlar : ${cfg.variants.join(",")}`);
   if (cfg.provider === "firefly") log(`  start_only : ${cfg.startModel || "kling"}`);
+  if (hybridFirefly) {
+    const ffCount = scenes.filter((s) => sceneUsesFirefly(s)).length;
+    log(`  hybrid     : ${ffCount} sahne video_model → Firefly`);
+  }
   log(`  çıktı      : ${cfg.sink.describe()}`);
   log(`  progress   : ${path.basename(cfg.progressFile)}`);
   if (cfg.scenesFilter?.size) log(`  sahne filt : ${[...cfg.scenesFilter].sort((a, b) => a - b)}`);
   log("=".repeat(64));
 
-  if (cfg.concurrency != null && !cfg.dryRun) {
-    return runPool(cfg, scenes, progress, log);
+  if (cfg.concurrency != null && !cfg.dryRun && !hybridFirefly) {
+    return runPool(cfg, scenes, progressByProvider, log);
   }
 
   const tally: Tally = {
@@ -266,8 +330,16 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
     if (mode === "start_only") startOnlyOrd += 1;
     if (cfg.scenesFilter && !cfg.scenesFilter.has(idx)) continue;
 
-    const adapterKey = route(cfg.provider, mode, ordinal, cfg.startModel || "kling");
+    const { provider: sceneProvider, adapterKey } = routeScene(
+      s,
+      ordinal,
+      cfg.provider,
+      cfg.startModel || "kling",
+    );
     const spec = getAdapter(adapterKey);
+    const sink = sceneSink(cfg, sceneProvider);
+    const progress = progressByProvider[sceneProvider];
+    const scenePace = PACING[sceneProvider] ?? pace;
     const sceneDir = path.join(cfg.keyframesDir, label);
     const firstImg = findFrame(sceneDir, "first");
     const lastImg = findFrame(sceneDir, "last");
@@ -286,15 +358,18 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
     }
 
     const ordNote = mode === "start_only" ? ` ord=${ordinal}` : "";
-    log(`\n--- ${label}  (mode=${mode}${ordNote}) -> ${adapterKey} [${spec.ready ? "HAZIR" : "PARK"}] ---`);
+    const vmNote = s.video_model ? ` vm=${s.video_model}` : "";
+    log(
+      `\n--- ${label}  (mode=${mode}${ordNote}${vmNote}) -> ${sceneProvider}/${adapterKey} [${spec.ready ? "HAZIR" : "PARK"}] ---`,
+    );
 
     let sceneGenerated = false;
 
-    for (const variant of cfg.variants) {
+    for (const variant of sceneVariantKeys(s, cfg.variants)) {
       const outName = `${label}_${spec.modelTag}_${variant}.mp4`;
       byModel[spec.modelTag] = (byModel[spec.modelTag] || 0) + 1;
 
-      if (cfg.sink.exists(outName)) {
+      if (sink.exists(outName)) {
         log(`   [${variant}] ATLA (zaten var): ${outName}`);
         tally.skipped += 1;
         continue;
@@ -305,20 +380,21 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
         if (!cfg.dryRun) {
           progress[outName] = {
             status: "pending_no_adapter",
-            provider: cfg.provider,
+            provider: sceneProvider,
             adapter: adapterKey,
             model_tag: spec.modelTag,
             variant,
             scene: label,
             mode,
+            video_model: s.video_model,
           };
-          saveProgress(cfg.progressFile, progress);
+          saveProviderProgress(sceneProvider);
         }
         tally.parked += 1;
         continue;
       }
 
-      const prompt = s[variant];
+      const prompt = resolveVariantPrompt(s, variant);
       if (!prompt || typeof prompt !== "string") {
         log(`   [${variant}] ATLA (JSON'da ${variant} yok)`);
         continue;
@@ -342,34 +418,34 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
       if (!resumeVidId && !fs.existsSync(required)) {
         log(`   [${variant}] HATA: gerekli kare yok: ${required}`);
         progress[outName] = { status: "no_input_frame", scene: label, variant };
-        saveProgress(cfg.progressFile, progress);
+        saveProviderProgress(sceneProvider);
         tally.failed += 1;
         continue;
       }
 
       if (runGenerated && !resumeVidId) {
-        const [lo, hi] = sceneGenerated ? pace.variant : pace.scene;
+        const [lo, hi] = sceneGenerated ? scenePace.variant : scenePace.scene;
         const gap = sceneGenerated ? "varyant-arası" : "sahne-arası";
-        await sleepBetween(lo, hi, `${gap} (${cfg.provider})`, log);
+        await sleepBetween(lo, hi, `${gap} (${sceneProvider})`, log);
       }
       if (!resumeVidId) {
         runGenerated = true;
         sceneGenerated = true;
       }
 
-      const outPath = cfg.sink.localPath(outName);
+      const outPath = sink.localPath(outName);
       const onSubmit = async (vidId: string) => {
         progress[outName] = {
           status: "submitted",
           vid_id: vidId,
-          provider: cfg.provider,
+          provider: sceneProvider,
           adapter: adapterKey,
           model_tag: spec.modelTag,
           variant,
           scene: label,
           mode,
         };
-        saveProgress(cfg.progressFile, progress);
+        saveProviderProgress(sceneProvider);
         log(`   [progress] submitted kaydedildi (vid_id=${vidId})`);
       };
 
@@ -391,11 +467,11 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
       };
 
       try {
-        const [produced, usedSpec, s4meta] = await generateGuarded(spec, job, cfg, mode);
-        const ref = cfg.sink.finalize(produced);
+        const [produced, usedSpec, s4meta] = await generateGuarded(spec, job, cfg, mode, sceneProvider);
+        const ref = sink.finalize(produced);
         const rec: Record<string, unknown> = {
           status: "done",
-          provider: cfg.provider,
+          provider: sceneProvider,
           adapter: adapterKey,
           model_tag: usedSpec.modelTag,
           variant,
@@ -410,7 +486,7 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
           tally.softened += 1;
         }
         progress[outName] = rec;
-        saveProgress(cfg.progressFile, progress);
+        saveProviderProgress(sceneProvider);
         tally.produced += 1;
         let extra = "";
         if (s4meta.softened) extra = `  [S4 SOFTENED #${s4meta.soften_attempt}]`;
@@ -426,7 +502,7 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
           mode,
           error: String(e),
         });
-        saveProgress(cfg.progressFile, progress);
+        saveProviderProgress(sceneProvider);
         if (recoverable) {
           tally.submitted += 1;
           log(`   [${variant}] BAŞARISIZ ama vid_id KAYITLI -> resume kurtarır: ${e}`);
@@ -451,10 +527,11 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
 async function runPool(
   cfg: PipelineConfig,
   scenes: SceneRecord[],
-  progress: Record<string, Record<string, unknown>>,
+  progressByProvider: Record<ProviderKey, Record<string, Record<string, unknown>>>,
   log: (s: string) => void,
 ): Promise<Tally> {
-  const store = new ProgressStore(cfg.progressFile);
+  const progress = progressByProvider.hailuo;
+  const store = new ProgressStore(sceneProgressFile(cfg, "hailuo"));
   const pace = PACING[cfg.provider] ?? { scene: [20, 60] as [number, number], variant: [20, 60] as [number, number] };
   const pool = new Pool(cfg.concurrency!, store, pace.scene);
   const tally: Tally = {
@@ -479,9 +556,11 @@ async function runPool(
     const ordinal = startOnlyOrd;
     if (mode === "start_only") startOnlyOrd += 1;
     if (cfg.scenesFilter && !cfg.scenesFilter.has(idx)) continue;
+    if (sceneUsesFirefly(s)) continue;
 
-    const adapterKey = route(cfg.provider, mode, ordinal, cfg.startModel || "kling");
+    const { adapterKey } = routeScene(s, ordinal, cfg.provider, cfg.startModel || "kling");
     const spec = getAdapter(adapterKey);
+    const sink = sceneSink(cfg, "hailuo");
     const sceneDir = path.join(cfg.keyframesDir, label);
     const firstImg = findFrame(sceneDir, "first");
     const lastImg = findFrame(sceneDir, "last");
@@ -499,11 +578,11 @@ async function runPool(
       required = firstImg;
     }
 
-    for (const variant of cfg.variants) {
+    for (const variant of sceneVariantKeys(s, cfg.variants)) {
       const outName = `${label}_${spec.modelTag}_${variant}.mp4`;
       byModel[spec.modelTag] = (byModel[spec.modelTag] || 0) + 1;
 
-      if (cfg.sink.exists(outName)) {
+      if (sink.exists(outName)) {
         log(`   [${variant}] ATLA (zaten var): ${outName}`);
         tally.skipped += 1;
         continue;
@@ -511,7 +590,7 @@ async function runPool(
       if (!spec.ready) {
         await store.update(outName, {
           status: "pending_no_adapter",
-          provider: cfg.provider,
+          provider: "hailuo",
           adapter: adapterKey,
           model_tag: spec.modelTag,
           variant,
@@ -522,7 +601,7 @@ async function runPool(
         continue;
       }
 
-      const prompt = s[variant];
+      const prompt = resolveVariantPrompt(s, variant);
       if (!prompt || typeof prompt !== "string") continue;
 
       const prev = progress[outName];
@@ -542,14 +621,14 @@ async function runPool(
         prompt,
         startImage: startArg,
         endImage: endArg,
-        outPath: cfg.sink.localPath(outName),
+        outPath: sink.localPath(outName),
         duration: dur,
         videoDir: cfg.videoDir,
         resumeVidId,
         outName,
         promptOptimizer: cfg.promptOptimizer !== false,
         submitMeta: {
-          provider: cfg.provider,
+          provider: "hailuo",
           adapter: adapterKey,
           model_tag: spec.modelTag,
           variant,
@@ -558,6 +637,7 @@ async function runPool(
         },
         _spec: spec,
         _mode: mode,
+        _provider: "hailuo" as ProviderKey,
       });
     }
   }
@@ -565,8 +645,10 @@ async function runPool(
   const produce = async (job: PoolJob) => {
     const spec = job._spec!;
     const mode = job._mode!;
-    const [produced, usedSpec, s4meta] = await generateGuarded(spec, job, cfg, mode);
-    const ref = cfg.sink.finalize(produced);
+    const sceneProvider = (job._provider as ProviderKey) || "hailuo";
+    const sink = sceneSink(cfg, sceneProvider);
+    const [produced, usedSpec, s4meta] = await generateGuarded(spec, job, cfg, mode, sceneProvider);
+    const ref = sink.finalize(produced);
     const meta: Record<string, unknown> = { file: ref };
     if (s4meta.softened) {
       meta.softened = true;

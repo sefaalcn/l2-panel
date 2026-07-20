@@ -33,6 +33,27 @@ async function main() {
   check("firefly alternate çift", route("firefly", "start_only", 2, "alternate") === "kling2.5");
   check("firefly alternate tek", route("firefly", "start_only", 3, "alternate") === "runway4.5");
 
+  console.log("[1b] video_model hybrid routing");
+  const { routeScene, fireflyAdapterFromVideoModel } = await import("../src/lib/video-model");
+  check(
+    "kling_2_5_turbo -> kling2.5",
+    fireflyAdapterFromVideoModel("kling_2_5_turbo", "start_only") === "kling2.5",
+  );
+  check(
+    "hailuo hybrid stays hailuo",
+    routeScene({ video_model: "hailuo", frame_mode: "both" }, 0, "hailuo").provider === "hailuo",
+  );
+  check(
+    "kling hybrid -> firefly",
+    routeScene({ video_model: "kling_2_5_turbo", frame_mode: "start_only" }, 0, "hailuo").provider ===
+      "firefly",
+  );
+  check(
+    "kling adapter key",
+    routeScene({ video_model: "kling_2_5_turbo", frame_mode: "start_only" }, 0, "hailuo").adapterKey ===
+      "kling2.5",
+  );
+
   console.log("[2] adaptor registry");
   const keys = [...allAdapters().keys()].sort();
   const expected = ["hailuo2.0", "hailuo2.3", "kling2.5", "ray3.14", "ray3.14_end", "runway4.5"];
@@ -102,8 +123,8 @@ async function main() {
     dryRun: true,
     log: () => {},
   });
-  // v1: 3 sahne, v2: yalnız scene_001 -> 4 plan
-  check(`hailuo dry-run planned=4 (gerçek: ${tallyH.planned})`, tallyH.planned === 4);
+  // v1: 3 sahne (scene_001'de alt≥2 yok → yalnız v1)
+  check(`hailuo dry-run planned=3 (gerçek: ${tallyH.planned})`, tallyH.planned === 3);
 
   const pathsF = resolveRouterPaths("firefly", root);
   const tallyF = await runPipeline({
