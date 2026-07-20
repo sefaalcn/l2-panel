@@ -1,12 +1,33 @@
 import { NextResponse } from "next/server";
+import fs from "fs";
+import path from "path";
 import { materializeExport, parseKeyframesSource } from "@/lib/ingest";
+import { PROJECTS_ROOT } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 export const runtime = "nodejs";
 
+function ensureProjectsWritable(): string | null {
+  try {
+    fs.mkdirSync(PROJECTS_ROOT, { recursive: true });
+    const probe = path.join(PROJECTS_ROOT, ".write_probe");
+    fs.writeFileSync(probe, "ok", "utf8");
+    fs.unlinkSync(probe);
+    return null;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return `projects/ yazılamıyor (${msg}) — Vercel'de dosya yükleme desteklenmez, localhost kullanın`;
+  }
+}
+
 export async function POST(req: Request) {
   try {
+    const diskErr = ensureProjectsWritable();
+    if (diskErr) {
+      return NextResponse.json({ detail: diskErr }, { status: 503 });
+    }
+
     const expected = (process.env.L2_INGEST_TOKEN || "").trim();
     if (expected) {
       const h = req.headers.get("x-l2-ingest-token") || "";

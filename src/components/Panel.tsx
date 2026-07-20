@@ -485,6 +485,15 @@ export default function Panel() {
     return () => clearTimeout(id);
   }, [creds.token, creds.ff_token, modelKey]);
 
+  useEffect(() => {
+    const v = creds.project?.trim();
+    if (!v || modelKey !== "hailuo") return;
+    const id = setTimeout(() => {
+      void jpost("/api/save-project", { value: v });
+    }, 600);
+    return () => clearTimeout(id);
+  }, [creds.project, modelKey]);
+
   function startPolling(name: string) {
     if (pollRef.current) clearInterval(pollRef.current);
     const tick = async () => {
@@ -768,6 +777,11 @@ export default function Panel() {
               />
               {(cr.key === "token" || cr.key === "ff_token") && creds[cr.key] && (
                 <div className="mono-sm" style={{ marginTop: 6 }}>{mask(creds[cr.key])}</div>
+              )}
+              {cr.key === "project" && modelKey === "hailuo" && (
+                <div className="hint" style={{ marginTop: 6 }}>
+                  Hailuo web → proje URL&apos;indeki ID (sayılar). Başlatınca hailuo_project.txt olarak kaydedilir.
+                </div>
               )}
               {cr.key === "ff_token" && (
                 <div className="hint" style={{ marginTop: 6 }}>
