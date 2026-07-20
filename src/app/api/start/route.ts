@@ -6,16 +6,39 @@ import { CODE_ROOT, MODELS, PANEL_DIR, PROJECTS_ROOT, sessionKeys } from "@/lib/
 import { mergeApiKeysIntoEnv, resolveApiKey, stageApiKeysForWorker } from "@/lib/api-keys";
 import { loadProjectScenes, projectNeedsGemini } from "@/lib/scenes";
 import { loadCredentialFiles } from "@/lib/credentials";
-import { projectHasFireflyScenes } from "@/lib/video-model";
+import { projectHasFireflyScenes, projectHasHailuoScenes } from "@/lib/video-model";
 import { KEYFRAMES_SOURCE_FILE, parseKeyframesSource } from "@/lib/ingest";
 import { activeRun, cleanCredFiles, writeRunstate } from "@/lib/runstate";
 
 export const dynamic = "force-dynamic";
 
+function stageCredential(
+  cred: (typeof MODELS.hailuo.credentials)[number] | (typeof MODELS.firefly.credentials)[number],
+  val: string,
+  env: NodeJS.ProcessEnv,
+  proj: string,
+) {
+  const tgt = cred.target as { type?: string; env?: string };
+  if (tgt?.type === "file" && tgt.env) {
+    const fpath = path.join(PANEL_DIR, `.l2_${cred.key}.txt`);
+    fs.mkdirSync(PANEL_DIR, { recursive: true });
+    fs.writeFileSync(fpath, val, "utf8");
+    env[tgt.env] = fpath;
+    if (cred.key === "ff_token") {
+      fs.writeFileSync(path.join(CODE_ROOT, "firefly_token.txt"), val, "utf8");
+    }
+    if (cred.key === "project") {
+      fs.writeFileSync(path.join(CODE_ROOT, "hailuo_project.txt"), val, "utf8");
+      fs.writeFileSync(path.join(proj, "hailuo_project.txt"), val, "utf8");
+    }
+  }
+}
+
 export async function POST(req: Request) {
   const body = await req.json();
   const project = String(body.project || "").trim();
-  const provider = String(body.provider || "hailuo");
+  // Orchestrator hep hailuo — sahne yönü JSON video_model ile (hybrid)
+  const provider = "hailuo";
   const variants = String(body.variants || "v1");
   const concurrency = body.concurrency != null ? Number(body.concurrency) : null;
   const scenesFilter = body.scenes ? String(body.scenes) : null;
@@ -36,19 +59,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ detail: `Proje yok: ${project}` }, { status: 404 });
   }
   fs.writeFileSync(path.join(proj, KEYFRAMES_SOURCE_FILE), keyframesSource, "utf8");
-  const model = MODELS[provider as keyof typeof MODELS];
-  if (!model) {
-    return NextResponse.json({ detail: `Bilinmeyen model: ${provider}` }, { status: 400 });
-  }
 
   const bodyCreds = (body.credentials || {}) as Record<string, string>;
   const fileCreds = loadCredentialFiles(project);
   const credentials = { ...fileCreds, ...bodyCreds };
-  for (const cred of model.credentials) {
-    if ("autoFromFile" in cred && cred.autoFromFile && fileCreds[cred.key]) {
-      credentials[cred.key] = fileCreds[cred.key];
-    }
-  }
 
   const env = { ...process.env, ...sessionKeys } as NodeJS.ProcessEnv;
   mergeApiKeysIntoEnv(env, body.api_keys as Record<string, string> | undefined);
@@ -59,69 +73,43 @@ export async function POST(req: Request) {
     cleanCredFiles();
     return NextResponse.json(
       {
-        detail:
-          "GEMINI_API_KEY gerekli — alternative_scene≥2 veya geekfree sahneler var (veya scene_description eksik)",
+        detail: "GEMINI_API_KEY gerekli — v1/v2 prompt üretimi (veya scene_description eksik)",
       },
       { status: 400 },
     );
   }
 
-  for (const cred of model.credentials) {
-    const val = (credentials[cred.key] || "").trim();
+  const needHailuo = projectHasHailuoScenes(projectScenes);
+  const needFirefly = projectHasFireflyScenes(projectScenes);
+  if (!needHailuo && !needFirefly) {
+    cleanCredFiles();
+    return NextResponse.json({ detail: "Projede sahne yok" }, { status: 400 });
+  }
+
+  const credGroups = [
+    ...(needHailuo ? MODELS.hailuo.credentials : []),
+    ...(needFirefly ? MODELS.firefly.credentials : []),
+  ];
+
+  for (const cred of credGroups) {
+    let val = (credentials[cred.key] || "").trim();
+    if ("autoFromFile" in cred && cred.autoFromFile && fileCreds[cred.key]) {
+      val = fileCreds[cred.key].trim();
+    }
     if (!val) {
       if (cred.required) {
         cleanCredFiles();
         const hint =
           "autoFromFile" in cred && cred.autoFromFile
             ? `${cred.label} gerekli — ${(cred.target as { name?: string }).name || "dosya"} (proje kökü veya proje klasörü)`
-            : `${cred.label} gerekli`;
+            : needFirefly && cred.key === "ff_token"
+              ? "Firefly Token gerekli — JSON'da video_model≠hailuo sahneler var"
+              : `${cred.label} gerekli`;
         return NextResponse.json({ detail: hint }, { status: 400 });
       }
       continue;
     }
-    const tgt = cred.target as { type?: string; env?: string };
-    if (tgt?.type === "file" && tgt.env) {
-      const fpath = path.join(PANEL_DIR, `.l2_${cred.key}.txt`);
-      fs.mkdirSync(PANEL_DIR, { recursive: true });
-      fs.writeFileSync(fpath, val, "utf8");
-      env[tgt.env] = fpath;
-      if (cred.key === "ff_token") {
-        fs.writeFileSync(path.join(CODE_ROOT, "firefly_token.txt"), val, "utf8");
-      }
-    }
-  }
-
-  if (provider === "hailuo" && projectHasFireflyScenes(projectScenes)) {
-    const ffCreds = MODELS.firefly.credentials;
-    for (const cred of ffCreds) {
-      let val = (credentials[cred.key] || fileCreds[cred.key] || "").trim();
-      if ("autoFromFile" in cred && cred.autoFromFile && fileCreds[cred.key]) {
-        val = fileCreds[cred.key].trim();
-      }
-      if (!val) {
-        if (cred.required) {
-          cleanCredFiles();
-          return NextResponse.json(
-            {
-              detail:
-                "Firefly Token gerekli — JSON'da video_model≠hailuo sahneler var (örn. kling_2_5_turbo)",
-            },
-            { status: 400 },
-          );
-        }
-        continue;
-      }
-      const tgt = cred.target as { type?: string; env?: string };
-      if (tgt?.type === "file" && tgt.env) {
-        const fpath = path.join(PANEL_DIR, `.l2_${cred.key}.txt`);
-        fs.mkdirSync(PANEL_DIR, { recursive: true });
-        fs.writeFileSync(fpath, val, "utf8");
-        env[tgt.env] = fpath;
-        if (cred.key === "ff_token") {
-          fs.writeFileSync(path.join(CODE_ROOT, "firefly_token.txt"), val, "utf8");
-        }
-      }
-    }
+    stageCredential(cred, val, env, proj);
   }
 
   const logf = path.join(proj, ".l2_run.log");
@@ -175,6 +163,7 @@ export async function POST(req: Request) {
       runtime: "local",
       engine: "node",
       worker: "tsx",
+      routing: needFirefly ? "hybrid (JSON video_model)" : "hailuo",
     });
   } catch (e) {
     cleanCredFiles();

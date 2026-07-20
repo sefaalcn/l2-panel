@@ -26,6 +26,14 @@ export function projectHasFireflyScenes(scenes: SceneRow[]): boolean {
   return scenes.some(sceneUsesFirefly);
 }
 
+export function sceneUsesHailuo(scene: SceneRow): boolean {
+  return isHailuoVideoModel(scene.video_model);
+}
+
+export function projectHasHailuoScenes(scenes: SceneRow[]): boolean {
+  return scenes.some(sceneUsesHailuo);
+}
+
 /** Firefly 3p adaptor anahtarı — JSON video_model adından */
 export function fireflyAdapterFromVideoModel(
   raw: unknown,
@@ -35,6 +43,18 @@ export function fireflyAdapterFromVideoModel(
   const n = normalizeVideoModel(raw);
   const mode = (frameMode || "both").toLowerCase();
 
+  // Kling 3.0 (önce — generic kling_ / turbo eşleşmesinden önce)
+  if (
+    n.includes("kling") &&
+    (n.includes("3_0") ||
+      n.includes("30") ||
+      n.includes("v3") ||
+      n.includes("kling3") ||
+      n === "kling_3" ||
+      n.startsWith("kling3"))
+  ) {
+    return "kling3.0";
+  }
   if (n.includes("kling") && (n.includes("2_5") || n.includes("25") || n.includes("turbo"))) {
     return "kling2.5";
   }
@@ -57,34 +77,27 @@ export type SceneRoute = {
 };
 
 /**
- * Sahne yönlendirmesi:
- * - Panel hailuo + video_model hailuo/boş → Hailuo
- * - Panel hailuo + video_model başka (kling_2_5_turbo vb.) → Firefly adaptörü
- * - Panel firefly → tüm sahneler mevcut firefly frame_mode kuralları
+ * Sahne yönlendirmesi — panel model seçmez; JSON video_model karar verir:
+ * - video_model hailuo/boş → Hailuo
+ * - video_model kling/runway/ray… → Firefly adaptörü
+ * globalProvider artık sadece orchestrator; "firefly" seçilse bile JSON'a uyar.
  */
 export function routeScene(
   scene: SceneRow,
   ordinal: number,
-  globalProvider: string,
+  _globalProvider: string,
   startModel = "kling",
 ): SceneRoute {
   const mode = String(scene.frame_mode || "both");
-  const gp = globalProvider.toLowerCase();
 
-  if (gp === "hailuo" && sceneUsesFirefly(scene)) {
+  if (sceneUsesFirefly(scene)) {
     return {
       provider: "firefly",
       adapterKey: fireflyAdapterFromVideoModel(scene.video_model, mode, ordinal),
     };
   }
 
-  if (gp === "firefly") {
-    return {
-      provider: "firefly",
-      adapterKey: route("firefly", mode, ordinal, startModel),
-    };
-  }
-
+  // Hailuo sahneler — JSON video_model hailuo/boş
   return {
     provider: "hailuo",
     adapterKey: route("hailuo", mode, ordinal, startModel),

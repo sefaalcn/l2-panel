@@ -80,6 +80,7 @@ async function buildParts(
   withImages: boolean,
   soften: boolean,
   geekFree = false,
+  translateV3 = false,
 ): Promise<Part[]> {
   const parts: Part[] = [];
   if (vid.uri && vid.mimeType) {
@@ -89,11 +90,11 @@ async function buildParts(
   let intro =
     geekFree
       ? "GEEKFREE MODE — watch ONLY the scene(s) below (their time range). " +
-        "Maximum child-friendly CARTOON GEEK is REQUIRED:\n" +
-        "  • v1 = clean optimizer action (same rules as normal)\n" +
-        "  • v2 = MUST include ONE in-frame symbol (Zzz, !, heart, sparkle, sweat drop, " +
-        "sound-wave, thought bubble…) matching scene_main_topic / emotion\n" +
-        "  • v3 = MUST include ONE strong cartoon acting gag woven into the motion\n" +
+        "Maximum child-friendly CARTOON GEEK is REQUIRED in v1 ONLY:\n" +
+        "  • v1 = ONE continuous optimizer action WITH exactly ONE geek touch woven into that same motion " +
+        "(one in-frame symbol OR one small acting gag — NOT both; single beat, one movement)\n" +
+        "  • v2 = slow-motion main action (same rules as normal v2 — NOT a frozen face shot)\n" +
+        "  • v3 = see the v3 instruction below (translation mode) — NOT a gag\n" +
         "Pick symbols from the verb→effect pool (sleep→Zzz, surprise→!, confuse→?, love→heart, " +
         "shout→sound-waves, idea→light-bulb, stress→sweat).\n\n"
       : "VIDEO CONTEXT (what this whole video is about — use it to judge each scene's role, tone and " +
@@ -105,6 +106,16 @@ async function buildParts(
 
   if (geekFree && videoContext.trim()) {
     intro += "VIDEO CONTEXT (story/tone reference):\n" + videoContext.trim() + "\n\n";
+  }
+
+  if (translateV3) {
+    intro +=
+      "\n\n⚠️ V3 OVERRIDE FOR THIS RUN (replaces the system-prompt v3 definition):\n" +
+      "v3 = the creator's user note translated FAITHFULLY into natural English.\n" +
+      "  • LITERAL translation of the creator's intent — keep every element, verb and detail exactly as written\n" +
+      "  • do NOT optimize, do NOT add camera brackets, symbols, gags, effects or a style tag\n" +
+      "  • do NOT add anything that is not in the note; do NOT drop anything that is\n" +
+      "  • plain natural English sentences, nothing else";
   }
 
   if (soften) {
@@ -204,6 +215,7 @@ export async function genBatch(
   charRefs: { name: string; data: Buffer }[],
   swapOn: boolean,
   geekFree = false,
+  translateV3 = false,
 ): Promise<Record<string, unknown>[] | null> {
   let lastErr: unknown = null;
   const modes: [boolean, boolean, string][] = [
@@ -225,6 +237,7 @@ export async function genBatch(
           withImages,
           soften,
           geekFree,
+          translateV3,
         );
         const resp = await client.models.generateContent({
           model: GEMINI_MODEL,

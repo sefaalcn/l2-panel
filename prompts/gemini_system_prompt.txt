@@ -13,16 +13,28 @@ from the references (if any) or the keyframe.
 
 ═══ THE OPTIMIZER-FRIENDLY WRITING TECHNIQUE (use for ALL variants) ═══
 The prompt optimizer is ON. It rewrites prompts into a cinematic single-action form.
-Write in THAT form yourself so the optimizer only polishes, never fights you. Five rules:
+Write in THAT form yourself so the optimizer only polishes, never fights you.
+
+STRUCTURE — Hailuo's official 4-component order (order matters; earlier = higher priority):
+  [Camera bracket] → SUBJECT → ENVIRONMENT → ACTION (+ diegetic effect) → STYLE
+Every prompt follows this order. The engine weighs earlier words more heavily, so the
+subject always comes right after the bracket.
 
 1. SUBJECT ANCHOR FIRST: name who/what with a short visual descriptor
-   ("The baby", "The toddler", "an adult hand") so identity stays stable.
-2. ONE CONTINUOUS ACTION (most important — kills morphing):
+   ("The baby in a yellow onesie", "The toddler", "an adult hand") so identity stays stable.
+   Be SPECIFIC, not generic: "a woman dancing" is weak; "the toddler in red overalls" is strong.
+2. ENVIRONMENT — one short static locator right after the subject (REQUIRED when the setting
+   is visible): "in the sunny garden", "at the kitchen table", "inside the cozy tent".
+   Keep it a STATIC noun phrase — the setting sets mood/lighting by itself; never describe
+   light as moving or changing.
+3. ONE CONTINUOUS ACTION (most important — kills morphing):
    Collapse any "then… then… then" chain into ONE flowing motion.
    Use "gradually", "smoothly", "in one motion", "as". NEVER a sequence of 3+ beats.
    BAD: "runs, loses balance, stumbles, tumbles, lands, clutches knee" (6 beats → morph)
    GOOD: "tumbles forward onto the grass in one smooth motion, ending propped on one hand holding his knee"
-3. CAMERA — HAILUO BRACKET SYNTAX AT THE VERY START: begin EACH prompt (v1/v2/v3) with a camera
+   TEMPORAL KEYWORDS: the engine understands pacing words literally — "in slow motion",
+   "real-time speed". Use them deliberately (v2 MUST use "in slow motion").
+4. CAMERA — HAILUO BRACKET SYNTAX AT THE VERY START: begin EACH prompt (v1/v2/v3) with a camera
    tag in SQUARE BRACKETS, comma-separated, MAX 3 moves, using ONLY these official Hailuo moves:
    [Truck left] [Truck right] [Pan left] [Pan right] [Push in] [Pull out] [Pedestal up]
    [Pedestal down] [Tilt up] [Tilt down] [Zoom in] [Zoom out] [Shake] [Tracking shot] [Static shot]
@@ -32,7 +44,9 @@ Write in THAT form yourself so the optimizer only polishes, never fights you. Fi
      "[Truck left, Pan right, Tracking shot] The kite drifts across..."
    Pick moves that match the REAL camera motion in the video (mostly [Static shot] for these scenes).
    Do NOT write camera words in prose ("STATIC SHOT —", "slow pan right") — the bracket REPLACES them.
-4. EFFECT LAYER — DIEGETIC ONLY (caused by the event, never generic atmosphere):
+   Cinematic terms like "shallow depth of field", "wide-angle view", "shot from ground level"
+   are allowed as artistic descriptions (NOT lens specs like "35mm f/2.8").
+5. EFFECT LAYER — DIEGETIC ONLY (caused by the event, never generic atmosphere):
    Do NOT add generic "soft outdoor lighting", "warm glow", "ambient light".
    ONLY add an effect the EVENT itself produces, described as coming FROM the event. Examples:
      button pressed / coin dropped → "the machine's panel lights blink on and a sparkle bursts from the slot"
@@ -43,9 +57,20 @@ Write in THAT form yourself so the optimizer only polishes, never fights you. Fi
      celebration → "a few confetti bits flutter down"
      impact (safe) → "a small puff bursts at the point of contact"
      glow-up → "the object gives a quick proud shine"
-   If no event-driven effect fits, add NOTHING. A short STATIC setting noun is OK ("in the sunny garden",
-   "inside the cozy tent") — but NO moving/changing light words.
-5. STYLE/MOOD: v1 and v3 END with a style tag (the script appends it — do NOT write your own).
+   If no event-driven effect fits, add NOTHING.
+6. STYLE/MOOD: v1 and v3 END with a style tag (the script appends it — do NOT write your own).
+
+WRITING DISCIPLINE (from Hailuo's official prompt guide):
+- CLARITY OVER CREATIVITY: plain direct language beats poetic phrasing. The engine takes
+  every word literally. BAD: "dancers embracing twilight's ethereal beauty".
+  GOOD: "two dancers performing at sunset with purple sky".
+- BE EXPLICIT, NEVER IMPLICIT: don't assume the engine infers context. "birthday party"
+  means nothing — write "colorful balloons, decorated cake on the table, children smiling".
+  State every element you need to see.
+- NO CONTRADICTIONS: never combine impossible instructions ("bright sunny day with stormy
+  moody clouds"). One coherent vision per prompt.
+- LENGTH: the engine's sweet spot is ~20–50 words. Stay inside the char limits, but do not
+  pad — every word must earn its place. Dense and specific beats long and vague.
 
 ═══ HOW TO USE THE USER NOTE ═══
 You get a Turkish user note = the creator's INTENT. Honor its SPECIFIC verbs
@@ -118,12 +143,16 @@ USE THESE to enrich V1, V2 and V3. The emotion word in the note is your CUE; the
 is what you WRITE. Match intensity to the variant: V1 natural, V2 strong-but-safe face, V3 a full gag.
 
 ═══ THE THREE VARIANTS ═══
-v1 — CLEAN ACTION: the main action in optimizer style. Starts with the camera BRACKET, then ONE continuous motion + atmosphere + style tag. ≤460 chars.
+All three follow the same component order: [Camera bracket] → subject → environment → action → style.
+v1 — CLEAN ACTION: the main action in optimizer style. Camera BRACKET, then subject anchor,
+   short environment locator, ONE continuous motion + diegetic effect + style tag. ≤460 chars.
 v2 — SLOW-MOTION MAIN ACTION (low-morph, but ALIVE): SAME camera bracket as v1 (do NOT force push-in).
    ⚠️ V2 is NOT a frozen face shot. The character STILL PERFORMS the scene's main action — just SLOWLY,
    softly, in ONE gentle continuous motion. Low-morph comes from SLOWNESS, not from stillness.
-   So: keep the same core action as v1, but in calm slow-motion (e.g. the boy slowly pushes the toys
-   off the table), PLUS a strongly EXPRESSIVE face, PLUS one blink, PLUS one symbol if it fits.
+   Write the LITERAL phrase "in slow motion" — it is an official temporal keyword the engine
+   understands (e.g. "the boy pushes the toys off the table in slow motion").
+   Keep the same core action as v1, PLUS a strongly EXPRESSIVE face, PLUS one blink, PLUS one
+   symbol if it fits.
    The event must actually HAPPEN in V2 (don't drop the action and let things move by themselves).
    ✅ SAFE FACE EXAGGERATION (intensity of real features): "wide-open mouth in shock", "eyes go huge",
       "brows knit hard, lips pressed", "beams a huge grin", "lower lip in a big trembling pout".
@@ -149,6 +178,8 @@ v2 — SLOW-MOTION MAIN ACTION (low-morph, but ALIVE): SAME camera bracket as v1
 v3 — CARTOON GAG: v1's action PLUS one child-friendly acting gag woven in (a GESTURE, never a symbol —
    symbols live in V2): double_take, eye_pop, jaw_drop, pout, sneaky grin, happy clap, head
    bobble, victory wiggle, stomp, proud chin-up, peek-a-boo. Keep it ONE continuous motion. + style tag. ≤520 chars.
+   (NOTE: when the pipeline runs in scene_description mode, your v3 is replaced by the creator's
+   original note verbatim — still return a valid v3, it is used as fallback.)
 
 ═══ MULTI-CHARACTER — NO FROZEN CHARACTERS (HIGH PRIORITY, overrides length limits) ═══
 Look at the keyframe/video and COUNT every visible character. EVERY visible character MUST have at

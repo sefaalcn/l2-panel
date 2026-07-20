@@ -36,12 +36,9 @@ export function scenesHaveDescriptions(scenes: SceneRow[]): boolean {
   return scenes.every((s) => sceneDescription(s).length > 0);
 }
 
-/** Gemini gerekli mi? (Senaryo B veya alt≥2 / geekfree) */
+/** Gemini gerekli mi? v1 (optimize) + v2 (slow motion) için her koşuda */
 export function projectNeedsGemini(scenes: SceneRow[]): boolean {
-  if (!scenesHaveDescriptions(scenes)) return true;
-  return scenes.some(
-    (s) => parseAlternativeScene(s.alternative_scene) >= 2 || isGeekFree(s),
-  );
+  return scenes.length > 0;
 }
 
 export function sceneMainTopic(scene: SceneRow): string {
@@ -49,16 +46,13 @@ export function sceneMainTopic(scene: SceneRow): string {
 }
 
 /**
- * Üretilecek Hailuo varyantları:
- * - v1: her zaman (scene_description)
- * - v2: alternative_scene ≥ 2 (Gemini ek v1)
- * - v3: geekfree (v1 + geek)
+ * Üretilecek Hailuo varyantları (sahne başına):
+ * - v1: Gemini optimize aksiyon (+ geekfree ise tek geek hareketi)
+ * - v2: slow motion ana aksiyon
+ * - v3: scene_description verbatim (Hailuo optimizer kapalı)
  */
-export function productionVariantKeys(scene: SceneRow): string[] {
-  const keys: string[] = ["v1"];
-  if (parseAlternativeScene(scene.alternative_scene) >= 2) keys.push("v2");
-  if (isGeekFree(scene)) keys.push("v3");
-  return keys;
+export function productionVariantKeys(_scene: SceneRow): string[] {
+  return ["v1", "v2", "v3"];
 }
 
 export function productionVariantCount(scene: SceneRow): number {
@@ -70,17 +64,18 @@ export function loadScenesJsonFile(filePath: string): SceneRow[] {
   return (Array.isArray(raw) ? raw : raw.scenes || []) as SceneRow[];
 }
 
+/** Studio export — gemini cache vb. yanlışlıkla seçilmesin */
+export function isScenesJsonFilename(name: string): boolean {
+  if (!name.endsWith(".json")) return false;
+  const low = name.toLowerCase();
+  if (low.includes("progress") || low.includes("_output")) return false;
+  if (low.includes("_gemini") || low.includes("file_cache")) return false;
+  return name.includes("_scenes_manual") || name.includes("scenes");
+}
+
 export function findScenesJson(projectDir: string): string | null {
   if (!fs.existsSync(projectDir)) return null;
-  const cands = fs
-    .readdirSync(projectDir)
-    .filter(
-      (n) =>
-        n.includes("scenes") &&
-        n.endsWith(".json") &&
-        !n.toLowerCase().includes("progress") &&
-        !n.includes("_output"),
-    );
+  const cands = fs.readdirSync(projectDir).filter(isScenesJsonFilename);
   const manual = cands.find((n) => n.includes("_scenes_manual"));
   const name = manual || cands[0];
   return name ? path.join(projectDir, name) : null;
@@ -92,8 +87,9 @@ export function loadProjectScenes(projectName: string): SceneRow[] {
   return loadScenesJsonFile(file);
 }
 
-export function sceneVariantKeys(scene: SceneRow, _allVariants = ["v1", "v2", "v3"]): string[] {
-  return productionVariantKeys(scene);
+export function sceneVariantKeys(scene: SceneRow, allowedVariants = ["v1", "v2", "v3"]): string[] {
+  const allowed = new Set(allowedVariants.map((v) => v.trim().toLowerCase()).filter(Boolean));
+  return productionVariantKeys(scene).filter((k) => allowed.has(k));
 }
 
 export type ScenePlanRow = {
@@ -122,16 +118,13 @@ export function buildScenePlan(scenes: SceneRow[]): {
     .sort((a, b) => a.index - b.index);
 
   let total = 0;
-  let withAlt = 0;
   let withGeek = 0;
   for (const s of scenes) {
     total += productionVariantCount(s);
-    if (parseAlternativeScene(s.alternative_scene) >= 2) withAlt += 1;
     if (isGeekFree(s)) withGeek += 1;
   }
-  const parts: string[] = [`${scenes.length} sahne`];
-  if (withAlt) parts.push(`${withAlt}×alt(v2)`);
-  if (withGeek) parts.push(`${withGeek}×geek(v3)`);
+  const parts: string[] = [`${scenes.length} sahne × v1+v2+v3`];
+  if (withGeek) parts.push(`${withGeek}×geekfree→v1`);
 
   return {
     scenes: rows,

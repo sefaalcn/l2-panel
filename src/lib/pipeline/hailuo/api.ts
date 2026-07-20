@@ -27,6 +27,87 @@ export async function apiCall(
   return (await r.json()) as Record<string, unknown>;
 }
 
+function deepFindDownloadUrl(obj: unknown, vidId: string): string | null {
+  if (!obj || typeof obj !== "object") return null;
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const hit = deepFindDownloadUrl(item, vidId);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  const o = obj as Record<string, unknown>;
+  const id = String(o.id ?? o.videoID ?? o.videoId ?? o.video_id ?? "");
+  if (id === vidId) {
+    for (const key of [
+      "downloadURLWithoutWatermark",
+      "downloadURLWithWatermark",
+      "downloadUrl",
+      "videoUrl",
+      "url",
+    ]) {
+      const v = o[key];
+      if (typeof v === "string" && v.includes(".mp4")) {
+        return v.replace(/\\u002F/g, "/").replace(/\\\//g, "/");
+      }
+    }
+  }
+  for (const v of Object.values(o)) {
+    const hit = deepFindDownloadUrl(v, vidId);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** GET /v1/api/multimodal/video/result — HTML/feed yedeklerinden önce dener.
+ *  404/5xx = henüz yok veya endpoint yok → throw etme; feed+HTML devam etsin.
+ */
+export async function pollVideoResultApi(
+  vidId: string,
+  token: string,
+  ctx: HailuoContext,
+): Promise<{ url: string | null; status: string }> {
+  const q = buildQuery(hlParams());
+  const url = `${HAILUO_BASE}/v1/api/multimodal/video/result?${q}&videoID=${encodeURIComponent(vidId)}`;
+  const r = await fetch(url, {
+    headers: hlHeaders(token, ctx.projectId, "", getCookies(ctx)),
+  });
+  if (r.status === 401 || r.status === 403) {
+    throw new Error("Hailuo token süresi dolmuş (result API) — token/cookie yenile");
+  }
+  // 404 sık: video henüz result endpoint'te yok — poll döngüsünü kırma
+  if (!r.ok) return { url: null, status: `http_${r.status}` };
+  const resp = (await r.json()) as Record<string, unknown>;
+  const data = (resp.data || {}) as Record<string, unknown>;
+  const direct = String(data.videoURL || data.video_url || data.downloadURL || "").trim();
+  if (direct) return { url: direct, status: String(data.status || "ready") };
+  const nested = deepFindDownloadUrl(resp, vidId);
+  return { url: nested, status: String(data.status || "") };
+}
+
+/** processing feed — HTML scrape yedek */
+export async function pollFeedForDownload(
+  vidId: string,
+  token: string,
+  ctx: HailuoContext,
+): Promise<string | null> {
+  const bodies: Record<string, unknown>[] = [
+    { batchInfoList: [], type: 1, projectID: ctx.projectId },
+    { batchInfoList: [{ videoID: vidId }], type: 1, projectID: ctx.projectId },
+    { videoID: vidId, projectID: ctx.projectId },
+  ];
+  for (const body of bodies) {
+    try {
+      const resp = await apiCall("/api/feed/creation/my/processing", body, token, ctx);
+      const hit = deepFindDownloadUrl(resp, vidId);
+      if (hit) return hit;
+    } catch {
+      /* sonraki body dene */
+    }
+  }
+  return null;
+}
+
 export async function heartbeat(token: string, ctx: HailuoContext): Promise<number> {
   try {
     const path = "/api/feed/creation/my/processing";

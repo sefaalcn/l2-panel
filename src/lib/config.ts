@@ -39,10 +39,10 @@ export const MODELS = {
     options: [
       {
         key: "prompt_optimizer",
-        label: "Prompt Optimizer",
+        label: "Hailuo Prompt Optimizer",
         type: "toggle",
         default: true,
-        note: "Açık=optimize. Kapalı=verbatim (--no-optimizer).",
+        note: "Açık: Hailuo promptu kendi optimize eder (önerilen). Kapalı: JSON'daki metin aynen gider.",
       },
     ],
   },

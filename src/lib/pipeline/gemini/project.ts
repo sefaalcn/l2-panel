@@ -44,9 +44,10 @@ export function setupProject(projectPath: string, keyframesSource: KeyframesSour
     .readdirSync(base)
     .filter(
       (n) =>
-        n.includes("scenes") &&
         n.endsWith(".json") &&
-        !n.toLowerCase().includes("progress"),
+        !n.toLowerCase().includes("progress") &&
+        !n.includes("_gemini") &&
+        (n.includes("_scenes_manual") || n.includes("scenes")),
     );
   const manual = scenesCandidates.find((n) => n.includes("_scenes_manual"));
   const scenesJson = path.join(base, manual || scenesCandidates[0] || "");

@@ -30,19 +30,19 @@ export async function runHailuoRouter(opts: RunOptions): Promise<number> {
   const hybrid = projectHasFireflyScenes(manual);
   if (hybrid) {
     const ff = manual.filter(sceneUsesFirefly);
-    log(`[cli] hybrid routing: ${ff.length} sahne Firefly (video_model)`);
+    const hl = manual.filter((s) => !sceneUsesFirefly(s));
+    log(`[cli] hybrid routing: ${hl.length}×Hailuo + ${ff.length}×Firefly (JSON video_model)`);
   }
 
   const variants = parseVariantsFlag(opts.variants);
   const scenesFilter = opts.scenes ? parseScenesArg(opts.scenes) : null;
 
   let concurrency = opts.concurrency;
-  if (hybrid) {
-    concurrency = 1;
-  } else if (concurrency == null) {
-    concurrency = 2;
-  }
+  if (concurrency == null) concurrency = 2;
   if (concurrency <= 1) concurrency = 1;
+  if (hybrid) {
+    log(`[cli] hybrid paralel: Hailuo concurrency=${concurrency} · Firefly/Kling concurrency=1`);
+  }
 
   const fireflyPaths = resolveRouterPaths("firefly", opts.projectPath, opts.keyframesSource);
   const sink = new LocalSink(paths.outputDir);

@@ -6,7 +6,6 @@ import {
   scenesHaveDescriptions,
 } from "@/lib/scenes";
 import { generatePrompts } from "../gemini/run";
-import { syncPromptsFromScenes } from "../gemini/sync-prompts";
 import { runFireflyRouter } from "../router/run-firefly";
 import { runHailuoRouter } from "../router/run-hailuo";
 
@@ -15,23 +14,19 @@ export const nodeEngine: PipelineEngine = {
 
   async runPromptGeneration(opts) {
     const apiKey = resolveApiKey("GEMINI_API_KEY", opts.env);
+    if (!apiKey?.trim()) {
+      console.error("❌ GEMINI_API_KEY gerekli (v1 optimize + v2 slow motion)");
+      return 1;
+    }
     const scenesFile = findScenesJson(opts.projectPath);
     const scenes = scenesFile ? loadScenesJsonFile(scenesFile) : [];
-
-    if (scenesHaveDescriptions(scenes)) {
-      return syncPromptsFromScenes({
-        projectPath: opts.projectPath,
-        keyframesSource: opts.keyframesSource,
-        scenesFilter: opts.scenes,
-        apiKey,
-      });
-    }
 
     return generatePrompts({
       projectPath: opts.projectPath,
       keyframesSource: opts.keyframesSource,
       scenesFilter: opts.scenes,
       apiKey,
+      useSceneDescAsV3: scenesHaveDescriptions(scenes),
     });
   },
 

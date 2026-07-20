@@ -3,4 +3,5 @@ import "./hailuo20";
 import "./hailuo23";
 import "./ray314";
 import "./kling25";
+import "./kling30";
 import "./runway45";

@@ -1,6 +1,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { CODE_ROOT } from "@/lib/config";
 import { HAILUO_BASE, HAILUO_MODEL_20 } from "./constants";
 
 export type HailuoContext = {
@@ -19,7 +20,8 @@ export function setupContext(videoDir: string, modelId = HAILUO_MODEL_20): Hailu
   const baseDir = path.resolve(videoDir);
   if (!fs.existsSync(baseDir)) throw new Error(`Klasör yok: ${baseDir}`);
   const projectName = path.basename(baseDir);
-  const projectId = resolveProjectId(baseDir);
+  const { id: projectId, source } = resolveProjectId(baseDir);
+  log(`[hailuo] projectID=${projectId} (${source})`);
   return {
     baseDir,
     projectName,
@@ -29,17 +31,21 @@ export function setupContext(videoDir: string, modelId = HAILUO_MODEL_20): Hailu
   };
 }
 
-function resolveProjectId(baseDir: string): string {
-  const pf = path.join(baseDir, "hailuo_project.txt");
+function resolveProjectId(baseDir: string): { id: string; source: string } {
   const envPf = (process.env.HAILUO_PROJECT_FILE || "").trim();
   if (envPf && fs.existsSync(envPf)) {
-    return fs.readFileSync(envPf, "utf8").trim();
+    return { id: fs.readFileSync(envPf, "utf8").trim(), source: "panel (oturum)" };
   }
-  if (fs.existsSync(pf)) {
-    return fs.readFileSync(pf, "utf8").trim();
+  const local = path.join(baseDir, "hailuo_project.txt");
+  if (fs.existsSync(local)) {
+    return { id: fs.readFileSync(local, "utf8").trim(), source: path.basename(baseDir) + "/hailuo_project.txt" };
+  }
+  const global = path.join(CODE_ROOT, "hailuo_project.txt");
+  if (fs.existsSync(global)) {
+    return { id: fs.readFileSync(global, "utf8").trim(), source: "hailuo_project.txt" };
   }
   throw new Error(
-    `Hailuo proje ID yok. ${pf} oluştur veya panelden Proje ID gir.`,
+    `Hailuo proje ID yok. Panelden Proje ID gir veya ${local} / ${global} oluştur.`,
   );
 }
 
@@ -48,6 +54,7 @@ export function credCandidates(envVar: string, defaultName: string, baseDir: str
   const ep = (process.env[envVar] || "").trim();
   if (ep) cands.push(ep);
   cands.push(path.join(baseDir, defaultName));
+  cands.push(path.join(CODE_ROOT, defaultName));
   cands.push(path.join(os.homedir(), "Desktop", defaultName));
   return cands;
 }

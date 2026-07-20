@@ -146,6 +146,7 @@ function StartConfirmModal({
     totalVideos: number | null;
     scenario: string;
     concurrency: number;
+    promptOptimizer: boolean;
   };
 }) {
   if (!open) return null;
@@ -162,6 +163,7 @@ function StartConfirmModal({
             <div><dt>Toplam video</dt><dd>{summary.totalVideos}</dd></div>
           )}
           <div><dt>Senaryo</dt><dd>{summary.scenario}</dd></div>
+          <div><dt>Hailuo Optimizer</dt><dd>{summary.promptOptimizer ? "Açık" : "Kapalı (verbatim)"}</dd></div>
           <div><dt>Eşzamanlılık</dt><dd>{summary.concurrency}</dd></div>
         </dl>
         <div className="modal-actions">
@@ -173,21 +175,37 @@ function StartConfirmModal({
   );
 }
 
+const VARIANT_KEYS = ["v1", "v2", "v3"] as const;
+type VariantKey = (typeof VARIANT_KEYS)[number];
+
+const VARIANT_LABELS: Record<VariantKey, string> = {
+  v1: "v1 — Gemini optimize",
+  v2: "v2 — slow motion",
+  v3: "v3 — orijinal prompt (EN çeviri, optimizer kapalı)",
+};
+
 export default function Panel() {
   const [models, setModels] = useState<Record<string, ModelDef>>({});
   const [envSet, setEnvSet] = useState<Record<string, boolean>>({});
-  const [modelKey, setModelKey] = useState("hailuo");
   const [projects, setProjects] = useState<Project[]>([]);
   const [project, setProject] = useState("");
   const [creds, setCreds] = useState<Record<string, string>>({});
   const [optimizer, setOptimizer] = useState(true);
+  const [variantSel, setVariantSel] = useState<Record<VariantKey, boolean>>({
+    v1: true,
+    v2: true,
+    v3: true,
+  });
   const [concurrency, setConcurrency] = useState(2);
   const [variantsSummary, setVariantsSummary] = useState("");
   const [totalVideos, setTotalVideos] = useState<number | null>(null);
   const [scenario, setScenario] = useState<string | null>(null);
   const [needsGemini, setNeedsGemini] = useState(false);
+  const [needsHailuo, setNeedsHailuo] = useState(true);
   const [needsFirefly, setNeedsFirefly] = useState(false);
   const [fireflyModels, setFireflyModels] = useState<string[]>([]);
+  const [hailuoSceneCount, setHailuoSceneCount] = useState<number | null>(null);
+  const [fireflySceneCount, setFireflySceneCount] = useState<number | null>(null);
   const [outputs, setOutputs] = useState<
     { name: string; size_label: string; scene: string | null; variant: string | null; download_url: string }[]
   >([]);
@@ -214,6 +232,8 @@ export default function Panel() {
   const [cookieValid, setCookieValid] = useState<boolean | null>(null);
   const [cookiePaste, setCookiePaste] = useState("");
   const [cookieSaveMsg, setCookieSaveMsg] = useState("");
+  const [projectSaveMsg, setProjectSaveMsg] = useState("");
+  const [ffTokenSaveMsg, setFfTokenSaveMsg] = useState("");
   const [openFields, setOpenFields] = useState<Record<string, boolean>>({});
   const [useAnthropic, setUseAnthropic] = useState(false);
   const [apiKeys, setApiKeys] = useState({ GEMINI_API_KEY: "", ANTHROPIC_API_KEY: "" });
@@ -227,7 +247,16 @@ export default function Panel() {
     setOpenFields((prev) => ({ ...prev, [id]: !prev[id] }));
   }, []);
 
-  const model = models[modelKey];
+  const hailuoModel = models.hailuo;
+  const hybridRun = needsHailuo && needsFirefly;
+  const fireflyOnly = needsFirefly && !needsHailuo;
+  const effectiveConcurrency = fireflyOnly ? 1 : concurrency;
+
+  const selectedVariants = useMemo(
+    () => VARIANT_KEYS.filter((k) => variantSel[k]),
+    [variantSel],
+  );
+  const variantsParam = selectedVariants.join(",");
 
   const mergeCreds = useCallback((prev: Record<string, string>, incoming: Record<string, string>) => {
     const next = { ...prev };
@@ -271,9 +300,7 @@ export default function Panel() {
       setModels(m.models);
       setEnvSet(m.env_set || {});
       setUseAnthropic(Boolean(m.env_set?.ANTHROPIC_API_KEY));
-      const first = Object.keys(m.models).find((k) => m.models[k].active) || Object.keys(m.models)[0];
-      setModelKey(first);
-      const opt = m.models[first]?.options?.find((o) => o.key === "prompt_optimizer");
+      const opt = m.models.hailuo?.options?.find((o) => o.key === "prompt_optimizer");
       setOptimizer(opt?.default !== false);
       await loadProjects();
       await loadCredentials();
@@ -286,7 +313,7 @@ export default function Panel() {
       setOutputs([]);
       return;
     }
-    const prov = provider || modelKey;
+    const prov = provider || (needsFirefly && !needsHailuo ? "firefly" : "hailuo");
     setOutputsLoading(true);
     try {
       const d = await jget<{
@@ -301,15 +328,27 @@ export default function Panel() {
     } finally {
       setOutputsLoading(false);
     }
-  }, [project, modelKey]);
+  }, [project, needsFirefly, needsHailuo]);
 
   useEffect(() => {
-    void loadOutputs(project || undefined, modelKey);
-  }, [project, modelKey, loadOutputs]);
+    void loadOutputs(project || undefined);
+  }, [project, loadOutputs]);
 
   useEffect(() => {
     if (project) void loadCredentials(project);
   }, [project, loadCredentials]);
+
+  useEffect(() => {
+    if (!cookieOk || cookieValid === false) {
+      setOpenFields((prev) => ({ ...prev, cookie: true }));
+    }
+  }, [cookieOk, cookieValid]);
+
+  useEffect(() => {
+    if (needsFirefly && !creds.ff_token?.trim() && !credFound.ff_token) {
+      setOpenFields((prev) => ({ ...prev, "cred-ff_token": true }));
+    }
+  }, [needsFirefly, creds.ff_token, credFound.ff_token]);
 
   useEffect(() => {
     if (!project) {
@@ -318,6 +357,10 @@ export default function Panel() {
       setVariantsSummary("");
       setTotalVideos(null);
       setSceneCount(null);
+      setNeedsHailuo(true);
+      setNeedsFirefly(false);
+      setHailuoSceneCount(null);
+      setFireflySceneCount(null);
       return;
     }
     const p = projects.find((x) => x.name === project);
@@ -331,63 +374,109 @@ export default function Panel() {
       total_videos?: number;
       needs_gemini?: boolean;
       has_firefly_scenes?: boolean;
+      has_hailuo_scenes?: boolean;
+      hailuo_scene_count?: number;
+      firefly_scene_count?: number;
       firefly_models?: string[];
     }>(`/api/project/${encodeURIComponent(project)}/preflight`)
       .then((d) => {
         setScenario(d.scenario);
         setNeedsGemini(Boolean(d.needs_gemini));
-        setNeedsFirefly(Boolean(d.has_firefly_scenes));
+        const ff = Boolean(d.has_firefly_scenes);
+        const hl =
+          typeof d.has_hailuo_scenes === "boolean"
+            ? d.has_hailuo_scenes
+            : (d.hailuo_scene_count ?? Math.max(0, (d.scene_count || 0) - (d.firefly_scene_count || 0))) > 0;
+        setNeedsFirefly(ff);
+        setNeedsHailuo(hl || (!ff && (d.scene_count || 0) > 0));
         setFireflyModels(d.firefly_models || []);
+        setHailuoSceneCount(d.hailuo_scene_count ?? null);
+        setFireflySceneCount(d.firefly_scene_count ?? null);
         if (d.keyframes_source) setKeyframesSource(d.keyframes_source);
-        setVariantsSummary(d.variants_summary || "");
-        setTotalVideos(d.total_videos ?? null);
         setSceneCount(d.scene_count ?? null);
-        const providerLbl = modelKey === "firefly" ? "Firefly" : "Hailuo";
         const scLbl: Record<string, string> = {
-          A: `Senaryo A (scene_description → ${providerLbl})`,
+          A: "Senaryo A (scene_description → JSON video_model)",
           B: "Senaryo B (Gemini videodan üretecek)",
           "B-eksik": "Senaryo B — EKSİK (video yok)",
         };
         const w = d.warnings || [];
         const src = d.keyframes_source === "swapped" ? "swapped" : "original";
+        const routeBits: string[] = [];
+        if (hl || (!ff && (d.scene_count || 0) > 0)) {
+          routeBits.push(`${d.hailuo_scene_count ?? "?"}×Hailuo`);
+        }
+        if (ff) {
+          routeBits.push(
+            `${d.firefly_scene_count ?? "?"}×${d.firefly_models?.length ? d.firefly_models.join("/") : "Firefly"}`,
+          );
+        }
         setPreflightTxt(
           `${d.scene_count} sahne · ${scLbl[d.scenario] || ""} · kf=${src}` +
-            (d.has_firefly_scenes
-              ? ` · ${d.firefly_models?.length ? d.firefly_models.join(", ") : "Firefly"} sahneleri`
-              : "") +
-            (w.length ? ` · ⚠ ${w.length} uyarı` : "") +
-            (p ? "" : ""),
+            (routeBits.length ? ` · ${routeBits.join(" + ")}` : "") +
+            (w.length ? ` · ⚠ ${w.length} uyarı` : ""),
         );
       })
       .catch(() => setScenario(null));
-  }, [project, projects, modelKey]);
+  }, [project, projects]);
+
+  useEffect(() => {
+    if (sceneCount == null) {
+      setTotalVideos(null);
+      setVariantsSummary("");
+      return;
+    }
+    const n = selectedVariants.length;
+    setTotalVideos(sceneCount * n);
+    setVariantsSummary(
+      n === 3
+        ? `${sceneCount} sahne × v1+v2+v3`
+        : n
+          ? `${sceneCount} sahne × ${selectedVariants.join("+")}`
+          : "varyant seçilmedi",
+    );
+  }, [sceneCount, selectedVariants]);
 
   const missing = useMemo(() => {
     const out: string[] = [];
-    if (!model?.active) return ["bu model henüz aktif değil"];
-    for (const cr of model.credentials) {
-      if (cr.autoFromFile) {
-        if (cr.required && !credFound[cr.key]) out.push(`${cr.label} (dosya)`);
-        else if (cr.key === "cookie" && credFound.cookie && cookieValid === false) out.push("Cookie süresi dolmuş");
-      } else if (cr.required && !creds[cr.key]?.trim()) {
-        out.push(cr.label);
+    if (!project) out.push("Üretilecek Proje seç");
+    if (!selectedVariants.length) out.push("En az bir varyant seç (v1/v2/v3)");
+
+    if (needsHailuo) {
+      for (const cr of hailuoModel?.credentials || []) {
+        if (cr.autoFromFile) {
+          if (cr.required && !credFound[cr.key]) out.push(`${cr.label} (dosya)`);
+          else if (cr.key === "cookie" && credFound.cookie && cookieValid === false) {
+            out.push("Cookie süresi dolmuş");
+          }
+        } else if (cr.required && !creds[cr.key]?.trim()) {
+          out.push(cr.label);
+        }
       }
     }
-    if (!project) out.push("Üretilecek Proje seç");
-    if (needsGemini && !envSet.GEMINI_API_KEY && !apiKeys.GEMINI_API_KEY.trim()) {
-      out.push("GEMINI_API_KEY yok (alt/geek veya Senaryo B)");
+    if (needsFirefly) {
+      if (!creds.ff_token?.trim() && !credFound.ff_token) {
+        out.push("Firefly Token (JSON video_model sahneleri)");
+      }
     }
-    if (
-      modelKey === "hailuo" &&
-      needsFirefly &&
-      !creds.ff_token?.trim() &&
-      !credFound.ff_token
-    ) {
-      out.push("Firefly Token (video_model sahneleri)");
+    if (needsGemini && !envSet.GEMINI_API_KEY && !apiKeys.GEMINI_API_KEY.trim()) {
+      out.push("GEMINI_API_KEY yok (v1/v2 üretimi)");
     }
     if (scenario === "B-eksik") out.push("proje eksik: scene_description yok ve kaynak video yok");
     return out;
-  }, [model, creds, credFound, cookieValid, project, scenario, needsGemini, needsFirefly, envSet, apiKeys, modelKey]);
+  }, [
+    project,
+    selectedVariants,
+    needsHailuo,
+    needsFirefly,
+    hailuoModel,
+    creds,
+    credFound,
+    cookieValid,
+    scenario,
+    needsGemini,
+    envSet,
+    apiKeys,
+  ]);
 
   function guessProjectName(f: File) {
     return f.name
@@ -424,13 +513,27 @@ export default function Panel() {
       try {
         d = await r.json();
       } catch {
+        const hint =
+          r.status === 500
+            ? "Dev sunucu bozulmuş olabilir — terminalde Ctrl+C, sonra npm run dev"
+            : r.status === 413
+              ? "Dosya çok büyük (413)"
+              : `Toplam ~${totalMb.toFixed(1)} MB`;
         throw new Error(
           r.status
-            ? `Sunucu yanıtı okunamadı (HTTP ${r.status}). Toplam ~${totalMb.toFixed(1)} MB — dosya çok büyük olabilir.`
+            ? `Sunucu yanıtı okunamadı (HTTP ${r.status}). ${hint}`
             : "Sunucuya ulaşılamadı — panel http://localhost:3000 adresinde mi?",
         );
       }
-      if (!r.ok) throw new Error(d.detail || d.error || `HTTP ${r.status}`);
+      if (!r.ok) {
+        const msg = d.detail || d.error;
+        if (msg && msg.toLowerCase() !== "internal server error") throw new Error(msg);
+        throw new Error(
+          msg === "Internal Server Error"
+            ? "Sunucu hatası — dev sunucuyu yeniden başlatın (npm run dev)"
+            : `HTTP ${r.status}`,
+        );
+      }
       setUploadMsg(`✓ ${d.project} yüklendi (${d.keyframes_source || uploadSource})`);
       setDropScenes(null);
       setDropZip(null);
@@ -470,8 +573,7 @@ export default function Panel() {
   }
 
   useEffect(() => {
-    const tokenKey = modelKey === "firefly" ? "ff_token" : "token";
-    const t = creds[tokenKey]?.trim();
+    const t = creds.token?.trim();
     if (!t) {
       setTokMsg("");
       setTokOk(null);
@@ -483,7 +585,7 @@ export default function Panel() {
       setTokMsg(d.message);
     }, 400);
     return () => clearTimeout(id);
-  }, [creds.token, creds.ff_token, modelKey]);
+  }, [creds.token]);
 
   function startPolling(name: string) {
     if (pollRef.current) clearInterval(pollRef.current);
@@ -491,7 +593,7 @@ export default function Panel() {
       try {
         const d = await jget<Record<string, unknown>>(`/api/progress/${encodeURIComponent(name)}`);
         setProgress(d);
-        void loadOutputs(name, modelKey);
+        void loadOutputs(name);
         const phase = d.phase as string | null;
         const alive = d.alive !== false;
         if (!phase || ["bitti", "hata", "durduruldu"].includes(phase)) {
@@ -518,6 +620,24 @@ export default function Panel() {
     pollRef.current = setInterval(tick, 4000);
   }
 
+  async function saveProjectIdFile() {
+    const v = creds.project?.trim();
+    if (!v) {
+      setProjectSaveMsg("Proje ID boş");
+      return;
+    }
+    const { ok, d } = await jpost<{ detail?: string; value?: string }>("/api/save-project", {
+      value: v,
+      project: project || undefined,
+    });
+    if (!ok) {
+      setProjectSaveMsg((d as { detail?: string }).detail || "kaydedilemedi");
+      return;
+    }
+    setProjectSaveMsg(`✓ hailuo_project.txt → ${(d as { value?: string }).value}`);
+    await loadCredentials(project || undefined);
+  }
+
   async function saveCookieFile() {
     setCookieSaveMsg("");
     const { ok, d } = await jpost<{ detail?: string; length?: number }>("/api/save-cookie", {
@@ -532,15 +652,33 @@ export default function Panel() {
     await loadCredentials(project || undefined);
   }
 
+  async function saveFireflyTokenFile() {
+    setFfTokenSaveMsg("");
+    const v = creds.ff_token?.trim();
+    if (!v) {
+      setFfTokenSaveMsg("Token boş");
+      return;
+    }
+    const { ok, d } = await jpost<{ detail?: string; length?: number }>("/api/save-firefly-token", {
+      value: v,
+    });
+    if (!ok) {
+      setFfTokenSaveMsg((d as { detail?: string }).detail || "kaydedilemedi");
+      return;
+    }
+    setFfTokenSaveMsg(`✓ firefly_token.txt kaydedildi (${(d as { length?: number }).length} karakter)`);
+    await loadCredentials(project || undefined);
+  }
+
   async function doStart() {
     setConfirmOpen(false);
     setStartMsg("başlatılıyor…");
     const keys = await flushApiKeys();
     const { ok, status, d } = await jpost<{ detail?: string; pid?: number }>("/api/start", {
       project,
-      provider: modelKey,
-      variants: "v1,v2,v3",
-      concurrency,
+      provider: "hailuo",
+      variants: variantsParam,
+      concurrency: effectiveConcurrency,
       credentials: creds,
       prompt_optimizer: optimizer,
       keyframes_source: keyframesSource,
@@ -577,7 +715,8 @@ export default function Panel() {
           variants: variantsSummary,
           totalVideos,
           scenario: scenarioLabel[scenario || ""] || scenario || "—",
-          concurrency,
+          concurrency: effectiveConcurrency,
+          promptOptimizer: optimizer,
         }}
       />
       <header className="top">
@@ -710,46 +849,61 @@ export default function Panel() {
             </CollapsibleFld>
           </div>
 
-          <label className="fld">
-            <span>Model</span>
-            <select value={modelKey} onChange={(e) => setModelKey(e.target.value)}>
-              {Object.entries(models).map(([k, v]) => (
-                <option key={k} value={k}>{v.label}</option>
-              ))}
-            </select>
-            {model && !model.active && <div className="hint">Bu model henüz aktif değil.</div>}
-          </label>
+          <div className="hint" style={{ marginBottom: 12 }}>
+            Model seçimi yok — her sahne JSON&apos;daki <b>video_model</b> alanına gider
+            {hybridRun
+              ? ` (${hailuoSceneCount ?? "?"} Hailuo + ${fireflySceneCount ?? "?"} Firefly).`
+              : fireflyOnly
+                ? " (bu projede yalnız Firefly)."
+                : " (bu projede yalnız Hailuo)."}
+          </div>
 
-          {modelKey === "hailuo" && needsFirefly && (
-            <CollapsibleFld
-              id="cred-ff_token"
-              title="Firefly Token (video_model sahneleri) *"
-              open={!!openFields["cred-ff_token"]}
-              onToggle={toggleField}
-              badge={
-                tokMsg && creds.ff_token ? (
-                  <span className={`badge ${tokOk === true ? "b-ok" : tokOk === false ? "b-err" : "b-warn"}`}>
-                    {tokMsg}
-                  </span>
-                ) : creds.ff_token?.trim() || credFound.ff_token ? (
-                  <span className="badge b-ok">✓</span>
-                ) : (
-                  <span className="badge b-warn">boş</span>
-                )
-              }
+          <CollapsibleFld
+            id="cred-ff_token"
+            title={`Firefly Token${needsFirefly ? " *" : ""}`}
+            open={openFields["cred-ff_token"] !== false}
+            onToggle={toggleField}
+            badge={
+              creds.ff_token?.trim() || credFound.ff_token ? (
+                <span className="badge b-ok">✓</span>
+              ) : (
+                <span className={`badge ${needsFirefly ? "b-err" : "b-warn"}`}>
+                  {needsFirefly ? "gerekli" : "boş"}
+                </span>
+              )
+            }
+          >
+            <div className="hint" style={{ marginBottom: 8 }}>
+              F12 → Network → firefly.adobe.com isteği → Authorization: Bearer …
+              {needsFirefly
+                ? ` JSON'da ${fireflyModels.length ? fireflyModels.join(", ") : "Firefly/Kling"} sahneleri var — zorunlu.`
+                : " JSON'da Firefly/Kling sahneleri olunca kullanılır (şimdilik opsiyonel)."}
+            </div>
+            <input
+              type="password"
+              value={creds.ff_token || ""}
+              onChange={(e) => setCreds((c) => ({ ...c, ff_token: e.target.value }))}
+              placeholder="Bearer eyJ… veya yalnız token"
+            />
+            {creds.ff_token?.trim() && (
+              <div className="mono-sm" style={{ marginTop: 6 }}>{mask(creds.ff_token)}</div>
+            )}
+            <button
+              type="button"
+              className="ghost"
+              style={{ marginTop: 6 }}
+              disabled={!creds.ff_token?.trim()}
+              onClick={() => void saveFireflyTokenFile()}
             >
-              <div className="hint" style={{ marginBottom: 8 }}>
-                Bu projede {fireflyModels.length ? fireflyModels.join(", ") : "Firefly"} sahneleri var — Hailuo koşusunda otomatik Firefly&apos;a gider.
-              </div>
-              <input
-                type="password"
-                value={creds.ff_token || ""}
-                onChange={(e) => setCreds((c) => ({ ...c, ff_token: e.target.value }))}
-              />
-            </CollapsibleFld>
-          )}
+              firefly_token.txt olarak kaydet
+            </button>
+            {ffTokenSaveMsg && <div className="hint" style={{ marginTop: 4 }}>{ffTokenSaveMsg}</div>}
+          </CollapsibleFld>
 
-          {model?.credentials.filter((cr) => !cr.autoFromFile).map((cr) => (
+          {needsHailuo &&
+            hailuoModel?.credentials
+              .filter((cr) => !cr.autoFromFile)
+              .map((cr) => (
             <CollapsibleFld
               key={cr.key}
               id={`cred-${cr.key}`}
@@ -757,7 +911,7 @@ export default function Panel() {
               open={!!openFields[`cred-${cr.key}`]}
               onToggle={toggleField}
               badge={
-                (cr.key === "token" || cr.key === "ff_token") && tokMsg ? (
+                cr.key === "token" && tokMsg ? (
                   <span className={`badge ${tokOk === true ? "b-ok" : tokOk === false ? "b-err" : "b-warn"}`}>
                     {tokMsg}
                   </span>
@@ -773,17 +927,29 @@ export default function Panel() {
                 value={creds[cr.key] || ""}
                 onChange={(e) => setCreds((c) => ({ ...c, [cr.key]: e.target.value }))}
               />
-              {(cr.key === "token" || cr.key === "ff_token") && creds[cr.key] && (
+              {cr.key === "token" && creds[cr.key] && (
                 <div className="mono-sm" style={{ marginTop: 6 }}>{mask(creds[cr.key])}</div>
               )}
-              {cr.key === "ff_token" && (
-                <div className="hint" style={{ marginTop: 6 }}>
-                  F12 → Network → firefly.adobe.com isteği → Authorization: Bearer … (başlatınca firefly_token.txt olarak kaydedilir)
-                </div>
+              {cr.key === "project" && (
+                <>
+                  <div className="hint" style={{ marginTop: 6 }}>
+                    Hailuo URL&apos;deki projectId (örn. 535588690484457478). Başlatınca otomatik kaydedilir.
+                  </div>
+                  <button
+                    type="button"
+                    className="ghost"
+                    style={{ marginTop: 6 }}
+                    disabled={!creds.project?.trim()}
+                    onClick={() => void saveProjectIdFile()}
+                  >
+                    hailuo_project.txt olarak kaydet
+                  </button>
+                  {projectSaveMsg && <div className="hint" style={{ marginTop: 4 }}>{projectSaveMsg}</div>}
+                </>
               )}
             </CollapsibleFld>
           ))}
-          {model?.credentials.some((cr) => cr.autoFromFile && cr.key === "cookie") && (
+          {needsHailuo && hailuoModel?.credentials.some((cr) => cr.autoFromFile && cr.key === "cookie") && (
             <CollapsibleFld
               id="cookie"
               title="Cookie"
@@ -805,45 +971,116 @@ export default function Panel() {
                 </span>
               }
             >
-              {(!cookieOk || cookieValid === false) && (
-                <>
-                  <textarea
-                    rows={3}
-                    value={cookiePaste}
-                    onChange={(e) => setCookiePaste(e.target.value)}
-                    style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }}
-                  />
-                  <button
-                    type="button"
-                    className="ghost"
-                    style={{ marginTop: 6 }}
-                    disabled={!cookiePaste.trim()}
-                    onClick={() => void saveCookieFile()}
-                  >
-                    hailuo_cookie.txt olarak kaydet
-                  </button>
-                  {cookieSaveMsg && <div className="hint" style={{ marginTop: 4 }}>{cookieSaveMsg}</div>}
-                </>
-              )}
+              <div className="hint" style={{ marginBottom: 8 }}>
+                F12 → Network → hailuoai.video isteği → Request Headers → <b>Cookie</b> satırının tamamını kopyala.
+                {cookieOk && cookieValid !== false && (
+                  <> Mevcut dosya geçerli — yenilemek için yapıştırıp kaydet.</>
+                )}
+              </div>
+              <textarea
+                rows={3}
+                placeholder="Cookie: satırı veya yalnızca değer (a=b; c=d; …)"
+                value={cookiePaste}
+                onChange={(e) => setCookiePaste(e.target.value)}
+                style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }}
+              />
+              <button
+                type="button"
+                className="ghost"
+                style={{ marginTop: 6 }}
+                disabled={!cookiePaste.trim()}
+                onClick={() => void saveCookieFile()}
+              >
+                hailuo_cookie.txt olarak kaydet
+              </button>
+              {cookieSaveMsg && <div className="hint" style={{ marginTop: 4 }}>{cookieSaveMsg}</div>}
             </CollapsibleFld>
           )}
 
-          {modelKey === "firefly" && model?.credentials.some((cr) => cr.autoFromFile && cr.key !== "cookie") && (
-            <div className="hint" style={{ marginBottom: 10 }}>
-              Opsiyonel dosyalar:{" "}
-              {credFound.ff_arp ? "firefly_arp.txt ✓" : "firefly_arp.txt —"}
-              {" · "}
-              {credFound.ff_nonce ? "firefly_nonce.txt ✓" : "firefly_nonce.txt —"}
-            </div>
+          {needsHailuo && (
+            <CollapsibleFld
+              id="prompt-optimizer"
+              title="Hailuo Prompt Optimizer"
+              open={openFields["prompt-optimizer"] !== false}
+              onToggle={toggleField}
+              badge={
+                <span className={`badge ${optimizer ? "b-ok" : "b-warn"}`}>
+                  {optimizer ? "açık" : "kapalı"}
+                </span>
+              }
+            >
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={optimizer}
+                  onChange={(e) => setOptimizer(e.target.checked)}
+                />
+                Hailuo promptu kendi optimize etsin
+              </label>
+              <div className="hint" style={{ marginTop: 8 }}>
+                Açık (varsayılan): Hailuo API&apos;ye gönderilen metni kendi iyileştirir.
+                Kapalı: JSON&apos;daki prompt aynen gider (eski verbatim mod). Firefly/Kling sahnelerine etki etmez.
+              </div>
+            </CollapsibleFld>
           )}
 
-          <div className="opts">
-            {model?.options?.filter((o) => o.type === "toggle").map((op) => (
-              <label key={op.key}>
-                <input type="checkbox" checked={optimizer} onChange={(e) => setOptimizer(e.target.checked)} /> {op.label}
-              </label>
-            ))}
-          </div>
+          <CollapsibleFld
+              id="variants"
+              title="Varyantlar"
+              open={openFields.variants !== false}
+              onToggle={toggleField}
+              badge={
+                <span className={`badge ${selectedVariants.length ? "b-ok" : "b-warn"}`}>
+                  {selectedVariants.length ? selectedVariants.join(",") : "—"}
+                </span>
+              }
+            >
+              <div className="hint" style={{ marginBottom: 8 }}>
+                Sahne başına gönderilecek promptlar. v1/v2 Hailuo optimizer ile; v3 = orijinal notun sadık İngilizce çevirisi (Hailuo&apos;da optimizer kapalı). Firefly/Kling aynı metni aynen alır.
+              </div>
+              {VARIANT_KEYS.map((k) => (
+                <label
+                  key={k}
+                  style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: 6 }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={variantSel[k]}
+                    onChange={(e) => setVariantSel((v) => ({ ...v, [k]: e.target.checked }))}
+                  />
+                  {VARIANT_LABELS[k]}
+                </label>
+              ))}
+              <div className="seg" role="group" aria-label="Varyant önayarları" style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  className={`seg-btn${selectedVariants.length === 3 ? " on" : ""}`}
+                  onClick={() => setVariantSel({ v1: true, v2: true, v3: true })}
+                >
+                  Tümü
+                  <small>v1+v2+v3</small>
+                </button>
+                {VARIANT_KEYS.map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    className={`seg-btn${selectedVariants.length === 1 && variantSel[k] ? " on" : ""}`}
+                    onClick={() => setVariantSel({ v1: k === "v1", v2: k === "v2", v3: k === "v3" })}
+                  >
+                    Yalnız {k}
+                  </button>
+                ))}
+              </div>
+            </CollapsibleFld>
+
+          {needsFirefly && (
+            <div className="hint" style={{ marginBottom: 10 }}>
+              Kling dosyaları:{" "}
+              {credFound.ff_arp || credFound.kling_arp ? "arp ✓" : "kling_arp.txt / firefly_arp.txt —"}
+              {" · "}
+              {credFound.ff_nonce || credFound.kling_nonce ? "nonce ✓" : "kling_nonce.txt —"}
+            </div>
+          )}
 
           <label className="fld">
             <span>Üretilecek Proje</span>
@@ -895,17 +1132,22 @@ export default function Panel() {
           </label>
 
           <label className="fld">
-            <span>Eşzamanlılık{modelKey === "firefly" ? " (Firefly sıralı)" : ""}</span>
+            <span>Eşzamanlılık{hybridRun ? " (Hailuo)" : fireflyOnly ? " (Firefly sıralı)" : ""}</span>
             <input
               type="number"
               min={1}
               max={6}
-              value={modelKey === "firefly" ? 1 : concurrency}
-              disabled={modelKey === "firefly"}
+              value={effectiveConcurrency}
+              disabled={fireflyOnly}
               onChange={(e) => setConcurrency(Number(e.target.value) || 2)}
             />
-            {modelKey === "firefly" && (
-              <div className="hint">Adobe Firefly tek seferde bir video üretir — sıralı koşu.</div>
+            {hybridRun && (
+              <div className="hint">
+                Hailuo bu sayı kadar paralel; Kling/Firefly kendi içinde 1 (sıralı) ama Hailuo ile aynı anda çalışır.
+              </div>
+            )}
+            {fireflyOnly && (
+              <div className="hint">Yalnız Firefly/Kling — tek tek (biri bitince diğeri).</div>
             )}
           </label>
 
@@ -936,7 +1178,7 @@ export default function Panel() {
                 setLiveTxt("durduruldu");
               }}
               onOpen={async () => {
-                const prov = String(progress.provider || modelKey);
+                const prov = String(progress.provider || (fireflyOnly ? "firefly" : "hailuo"));
                 await jpost("/api/open", { project: progress.project, target: "videos", provider: prov });
               }}
             />
@@ -947,16 +1189,30 @@ export default function Panel() {
           <div className="out-head">
             <h2 style={{ margin: 0 }}>Çıktılar</h2>
             <div className="out-actions">
-              <button type="button" className="ghost sm" disabled={!project || outputsLoading} onClick={() => void loadOutputs(undefined, modelKey)}>
+              <button
+                type="button"
+                className="ghost sm"
+                disabled={!project || outputsLoading}
+                onClick={() => void loadOutputs(undefined, fireflyOnly ? "firefly" : "hailuo")}
+              >
                 {outputsLoading ? "…" : "Yenile"}
               </button>
-              {outputs.length > 0 && project && (
+              {outputs.length > 0 && project && needsHailuo && (
                 <a
                   className="ghost sm link-btn"
-                  href={`/api/project/${encodeURIComponent(project)}/download?zip=1&provider=${encodeURIComponent(modelKey)}`}
+                  href={`/api/project/${encodeURIComponent(project)}/download?zip=1&provider=hailuo`}
                   download
                 >
-                  ZIP indir
+                  Hailuo ZIP
+                </a>
+              )}
+              {outputs.length > 0 && project && needsFirefly && (
+                <a
+                  className="ghost sm link-btn"
+                  href={`/api/project/${encodeURIComponent(project)}/download?zip=1&provider=firefly`}
+                  download
+                >
+                  Firefly ZIP
                 </a>
               )}
             </div>
@@ -1015,8 +1271,8 @@ function ProgressView({
   };
   const [ptxt, pcls] = phaseMap[phase || ""] || ["Boşta", "p-idle"];
   const c = (d.counts || {}) as Record<string, number>;
-  const producing = (d.producing || []) as string[];
-  const errors = (d.errors || []) as { scene: string; error: string }[];
+  const producing = (d.producing || []) as { id: string; label: string }[];
+  const errors = (d.errors || []) as { id: string; scene: string; error: string }[];
   const warnings = (d.warnings || []) as string[];
   const runError = d.error ? String(d.error) : null;
   const logTail = (d.log_tail || []) as string[];
@@ -1045,7 +1301,7 @@ function ProgressView({
           {producing.length > 0 && (
             <>
               <div className="section-t">Şu an üretilen</div>
-              <ul className="list">{producing.map((s) => <li key={s}><span className="chip c-soft">•</span> {s}</li>)}</ul>
+              <ul className="list">{producing.map((p) => <li key={p.id}><span className="chip c-soft">•</span> {p.label}</li>)}</ul>
             </>
           )}
           {errors.length > 0 && (
@@ -1053,7 +1309,7 @@ function ProgressView({
               <div className="section-t">Hatalar</div>
               <ul className="list">
                 {errors.map((e) => (
-                  <li key={e.scene}><span className="chip c-err">hata</span> <div><b>{e.scene}</b><div className="mono-sm">{e.error}</div></div></li>
+                  <li key={e.id}><span className="chip c-err">hata</span> <div><b>{e.scene}</b><div className="mono-sm">{e.error}</div></div></li>
                 ))}
               </ul>
             </>

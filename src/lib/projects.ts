@@ -7,11 +7,20 @@ import {
   readKeyframesSource,
   type KeyframesSource,
 } from "./ingest";
-import { buildScenePlan, loadProjectScenes, projectNeedsGemini, scenesHaveDescriptions } from "./scenes";
+import {
+  buildScenePlan,
+  findScenesJson,
+  loadScenesJsonFile,
+  projectNeedsGemini,
+  scenesHaveDescriptions,
+  type SceneRow,
+} from "./scenes";
 import {
   normalizeVideoModel,
   projectHasFireflyScenes,
+  projectHasHailuoScenes,
   sceneUsesFirefly,
+  sceneUsesHailuo,
 } from "./video-model";
 
 export type ProjectSummary = {
@@ -31,34 +40,20 @@ function dirHasFiles(dir: string): boolean {
   return fs.existsSync(dir) && fs.readdirSync(dir).length > 0;
 }
 
-function sourceScenesJson(proj: string): string | null {
-  const dir = path.join(PROJECTS_ROOT, proj);
-  if (!fs.existsSync(dir)) return null;
-  const cands = fs
-    .readdirSync(dir)
-    .filter(
-      (n) =>
-        n.includes("scenes") &&
-        n.endsWith(".json") &&
-        !n.toLowerCase().includes("progress") &&
-        !n.includes("_output"),
-    );
-  return cands[0] || null;
-}
-
 export function projectSummary(name: string): ProjectSummary {
   const dir = path.join(PROJECTS_ROOT, name);
-  const scenesName = sourceScenesJson(name);
+  const scenesPath = findScenesJson(dir);
+  const scenesName = scenesPath ? path.basename(scenesPath) : null;
   const kf = path.join(dir, "keyframes");
   const kfSwap = path.join(dir, "keyframes_swapped");
   const prompts = path.join(dir, `${name}_output`, "hailuo_prompts_claude.json");
   let sceneCount: number | null = null;
   let version: number | string | null = null;
-  if (scenesName) {
+  if (scenesPath) {
     try {
-      const raw = JSON.parse(fs.readFileSync(path.join(dir, scenesName), "utf8"));
-      const sc = Array.isArray(raw) ? raw : raw.scenes || [];
+      const sc = loadScenesJsonFile(scenesPath);
       sceneCount = sc.length;
+      const raw = JSON.parse(fs.readFileSync(scenesPath, "utf8"));
       version = typeof raw === "object" && !Array.isArray(raw) ? raw.version ?? null : null;
     } catch {
       /* */
@@ -113,8 +108,8 @@ export function preflight(name: string, sourceOverride?: KeyframesSource | null)
   const kfDir = path.join(dir, kfRoot);
   const hasActiveKf = dirHasFiles(kfDir);
 
-  const scenesName = s.scenes_json;
-  if (!scenesName) {
+  const scenesPath = findScenesJson(dir);
+  if (!scenesPath) {
     return {
       name,
       scene_count: null,
@@ -128,21 +123,19 @@ export function preflight(name: string, sourceOverride?: KeyframesSource | null)
       total_videos: 0,
     };
   }
-  const raw = JSON.parse(fs.readFileSync(path.join(dir, scenesName), "utf8"));
-  const sc: Record<string, unknown>[] = Array.isArray(raw) ? raw : raw.scenes || [];
+  const scenes = loadScenesJsonFile(scenesPath);
   const warnings: string[] = [];
   if (!hasActiveKf) {
     warnings.push(
       `${kfRoot}/ boş veya yok — keyframes ZIP yükle (kaynak: ${source})`,
     );
   }
-  const scenes = loadProjectScenes(name);
   let scenario: "A" | "B" | "B-eksik";
   const hasDescriptions = scenesHaveDescriptions(scenes);
   if (hasDescriptions) {
     scenario = "A";
     if (projectNeedsGemini(scenes)) {
-      warnings.push("Senaryo A — scene_description hazır; alt≥2 / geekfree sahneler için Gemini kullanılacak");
+      warnings.push("Gemini: v1 (optimize) + v2 (slow motion); v3 = scene_description verbatim");
     }
   } else if (s.has_video) {
     scenario = "B";
@@ -151,7 +144,7 @@ export function preflight(name: string, sourceOverride?: KeyframesSource | null)
     scenario = "B-eksik";
     warnings.push("scene_description ve kaynak video yok → üretilemez");
   }
-  for (const scene of sc) {
+  for (const scene of scenes as SceneRow[]) {
     const mode = String(scene.frame_mode || "both");
     const label = String(scene.label || `scene_${String(scene.index || 0).padStart(3, "0")}`);
     const firstJpg = path.join(kfDir, label, "frame_first.jpg");
@@ -169,12 +162,15 @@ export function preflight(name: string, sourceOverride?: KeyframesSource | null)
   }
   const plan = buildScenePlan(scenes);
   const fireflyScenes = scenes.filter(sceneUsesFirefly);
+  const hailuoScenes = scenes.filter(sceneUsesHailuo);
   return {
     name,
-    scene_count: sc.length,
+    scene_count: scenes.length,
     prompts_ready: hasDescriptions,
     needs_gemini: projectNeedsGemini(scenes),
     has_firefly_scenes: projectHasFireflyScenes(scenes),
+    has_hailuo_scenes: projectHasHailuoScenes(scenes),
+    hailuo_scene_count: hailuoScenes.length,
     firefly_scene_count: fireflyScenes.length,
     firefly_models: [
       ...new Set(

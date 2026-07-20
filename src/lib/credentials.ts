@@ -23,10 +23,9 @@ function loadFromDirs(dirs: string[], fname: string): string | null {
 /** Proje kökü veya seçili proje klasöründeki kimlik dosyalarını oku. */
 export function loadCredentialFiles(projectName?: string | null): Record<string, string> {
   const out: Record<string, string> = {};
-  const dirs = [CODE_ROOT];
-  if (projectName) {
-    dirs.push(path.join(PROJECTS_ROOT, projectName));
-  }
+  const dirs = projectName
+    ? [path.join(PROJECTS_ROOT, projectName), CODE_ROOT]
+    : [CODE_ROOT];
 
   const hailuoMap: Record<string, string> = {
     token: "hailuo_token.txt",

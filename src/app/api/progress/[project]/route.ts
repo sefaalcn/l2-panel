@@ -22,9 +22,9 @@ export async function GET(
   }
 
   const counts = { done: 0, submitted: 0, error: 0, other: 0 };
-  const producing: string[] = [];
+  const producing: { id: string; label: string }[] = [];
   const softened: { scene: string; attempt?: number }[] = [];
-  const errors: { scene: string; error: string }[] = [];
+  const errors: { id: string; scene: string; error: string }[] = [];
 
   const rs = readRunstate();
   const provider =
@@ -47,10 +47,14 @@ export async function GET(
         if (st === "done") counts.done += 1;
         else if (st === "submitted") {
           counts.submitted += 1;
-          producing.push(scene);
+          const variant = v.variant ? String(v.variant) : "";
+          producing.push({
+            id: k,
+            label: variant ? `${scene} · ${variant}` : scene,
+          });
         } else if (st === "error" || st === "failed") {
           counts.error += 1;
-          errors.push({ scene, error: String(v.error || "").slice(0, 120) });
+          errors.push({ id: k, scene, error: String(v.error || "").slice(0, 120) });
         } else counts.other += 1;
         if (v.softened) softened.push({ scene, attempt: v.soften_attempt as number | undefined });
       }

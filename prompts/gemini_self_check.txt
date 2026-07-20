@@ -13,9 +13,14 @@ RULES TO ENFORCE:
 3. NO ANIMATED LIGHTING: delete "soft/warm/outdoor lighting", "light shifts/glows/flickers", "sunlight", "shimmer", "lens flare".
 4. SINGLE CONTINUOUS ACTION: collapse any then→then→then chain into one flowing motion.
 5. V2 = SLOW main action (NOT frozen): same camera as v1; the character DOES perform the scene's main
-   action but slowly/gently in one motion (don't drop it); expressive FACE; one blink; ONE symbol max
+   action but slowly/gently in one motion (don't drop it); v2 MUST contain the literal temporal keyword
+   "in slow motion" (add it if missing); expressive FACE; one blink; ONE symbol max
    (Zzz/POW/sound waves/heart/sweat/!/bubble) if it fits; NO style tag. For object/machine scenes V2 must be a
    diegetic object-idle (lights pulse / icons glow / sparkle) — NOT "not applicable" (that's only for a character from behind).
+5b. STRUCTURE ORDER: each prompt follows [Camera bracket] → subject anchor → short static environment
+   locator ("in the sunny garden") → one continuous action. If the subject is generic ("someone",
+   "a character"), replace it with the specific role noun + short visual descriptor. Remove
+   contradictory instructions (e.g. sunny + stormy) and vague poetic phrasing — plain direct language.
 6. V3 = v1 action + ONE acting gag (gesture, not a symbol). v1 = clean. Keep the camera BRACKET at the very start of v1/v2/v3 (e.g. "[Pan right, Push in]"); convert any prose camera ("STATIC SHOT —") into the bracket form.
 7. face_visible=false → no facial actions/gags; no "exaggerated faces"; drive motion from hands/objects/body.
 8. Screen overlays (impact stars, screen shake, alarm, iris, "POW" as screen graphic, dizzy spinning stars) must NOT be

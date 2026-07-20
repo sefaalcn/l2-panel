@@ -60,14 +60,19 @@ const PACING: Record<string, { scene: [number, number]; variant: [number, number
   hailuo: { scene: [20, 60], variant: [20, 60] },
 };
 
-const FIREFLY_FALLBACK: Record<string, string> = { kling: "runway4.5", runway: "kling2.5" };
-
 const DURATION: Record<string, [Set<number> | null, number]> = {
   hailuo20: [new Set([6, 10]), 6],
   hailuo23: [new Set([6, 10]), 6],
   ray314: [new Set([5]), 5],
   runway: [new Set([8]), 8],
   kling: [new Set([5]), 5],
+  kling3: [new Set([5, 10, 15]), 5],
+};
+
+const FIREFLY_FALLBACK: Record<string, string> = {
+  kling: "runway4.5",
+  kling3: "kling2.5",
+  runway: "kling2.5",
 };
 
 function resolveDuration(scene: SceneRecord, modelTag: string): [number, string | null] {
@@ -237,15 +242,17 @@ function summary(cfg: PipelineConfig, tally: Tally, byModel: Record<string, numb
 
 function resolveVariantPrompt(s: SceneRecord, variant: string): string | null {
   if (variant === "v3") {
-    const stored = String(s.v3 || "").trim();
-    if (stored) return stored;
-    const base = String(s.v1 || "").trim();
-    const geek = String(s.geek || "").trim();
-    if (base && geek) return `${base} ${geek}`.trim();
-    return null;
+    // v3 = orijinal notun İngilizce çevirisi (Gemini); yoksa scene_desc verbatim
+    const orig = String(s.v3 || s.scene_desc || "").trim();
+    return orig || null;
   }
   const p = s[variant];
   return typeof p === "string" && p.trim() ? p.trim() : null;
+}
+
+function variantPromptOptimizer(variant: string, cfg: PipelineConfig): boolean {
+  if (variant === "v3") return false;
+  return cfg.promptOptimizer !== false;
 }
 
 export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
@@ -304,8 +311,8 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
   if (cfg.scenesFilter?.size) log(`  sahne filt : ${[...cfg.scenesFilter].sort((a, b) => a - b)}`);
   log("=".repeat(64));
 
-  if (cfg.concurrency != null && !cfg.dryRun && !hybridFirefly) {
-    return runPool(cfg, scenes, progressByProvider, log);
+  if (cfg.concurrency != null && !cfg.dryRun) {
+    return runPool(cfg, scenes, progressByProvider, log, hybridFirefly);
   }
 
   const tally: Tally = {
@@ -463,7 +470,7 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
         videoDir: cfg.videoDir,
         onSubmit,
         resumeVidId,
-        promptOptimizer: cfg.promptOptimizer !== false,
+        promptOptimizer: variantPromptOptimizer(variant, cfg),
       };
 
       try {
@@ -529,11 +536,22 @@ async function runPool(
   scenes: SceneRecord[],
   progressByProvider: Record<ProviderKey, Record<string, Record<string, unknown>>>,
   log: (s: string) => void,
+  hybridFirefly = false,
 ): Promise<Tally> {
-  const progress = progressByProvider.hailuo;
-  const store = new ProgressStore(sceneProgressFile(cfg, "hailuo"));
-  const pace = PACING[cfg.provider] ?? { scene: [20, 60] as [number, number], variant: [20, 60] as [number, number] };
-  const pool = new Pool(cfg.concurrency!, store, pace.scene);
+  const hailuoStore = new ProgressStore(sceneProgressFile(cfg, "hailuo"));
+  const fireflyStore = hybridFirefly
+    ? new ProgressStore(sceneProgressFile(cfg, "firefly"))
+    : null;
+  const stores: Record<ProviderKey, ProgressStore> = {
+    hailuo: hailuoStore,
+    firefly: fireflyStore || hailuoStore,
+  };
+
+  const hailuoConcurrency = Math.max(1, cfg.concurrency ?? 2);
+  const fireflyConcurrency = 1;
+  const hailuoPace = PACING.hailuo?.scene ?? ([20, 60] as [number, number]);
+  const fireflyPace = PACING.firefly?.scene ?? ([8, 20] as [number, number]);
+
   const tally: Tally = {
     produced: 0,
     skipped: 0,
@@ -545,9 +563,16 @@ async function runPool(
   };
   const byModel: Record<string, number> = {};
   let startOnlyOrd = 0;
-  const jobs: PoolJob[] = [];
+  const hailuoJobs: PoolJob[] = [];
+  const fireflyJobs: PoolJob[] = [];
 
-  log(`  [POOL] concurrency=${cfg.concurrency}  pacing=${pace.scene}`);
+  if (hybridFirefly) {
+    log(
+      `  [POOL] hybrid paralel — Hailuo×${hailuoConcurrency} + Firefly/Kling×${fireflyConcurrency}`,
+    );
+  } else {
+    log(`  [POOL] concurrency=${hailuoConcurrency}  pacing=${hailuoPace}`);
+  }
 
   for (const s of scenes) {
     const idx = Number(s.index ?? 0);
@@ -556,11 +581,19 @@ async function runPool(
     const ordinal = startOnlyOrd;
     if (mode === "start_only") startOnlyOrd += 1;
     if (cfg.scenesFilter && !cfg.scenesFilter.has(idx)) continue;
-    if (sceneUsesFirefly(s)) continue;
 
-    const { adapterKey } = routeScene(s, ordinal, cfg.provider, cfg.startModel || "kling");
+    const { provider: sceneProvider, adapterKey } = routeScene(
+      s,
+      ordinal,
+      cfg.provider,
+      cfg.startModel || "kling",
+    );
+    if (sceneProvider === "firefly" && !hybridFirefly) continue;
+
     const spec = getAdapter(adapterKey);
-    const sink = sceneSink(cfg, "hailuo");
+    const sink = sceneSink(cfg, sceneProvider);
+    const progress = progressByProvider[sceneProvider];
+    const store = stores[sceneProvider];
     const sceneDir = path.join(cfg.keyframesDir, label);
     const firstImg = findFrame(sceneDir, "first");
     const lastImg = findFrame(sceneDir, "last");
@@ -590,12 +623,13 @@ async function runPool(
       if (!spec.ready) {
         await store.update(outName, {
           status: "pending_no_adapter",
-          provider: "hailuo",
+          provider: sceneProvider,
           adapter: adapterKey,
           model_tag: spec.modelTag,
           variant,
           scene: label,
           mode,
+          video_model: s.video_model,
         });
         tally.parked += 1;
         continue;
@@ -615,7 +649,7 @@ async function runPool(
       const [dur, durWarn] = resolveDuration(s, spec.modelTag);
       if (durWarn) log(`   [UYARI-SÜRE] ${durWarn}`);
 
-      jobs.push({
+      const job: PoolJob = {
         scene: s,
         variant,
         prompt,
@@ -626,19 +660,22 @@ async function runPool(
         videoDir: cfg.videoDir,
         resumeVidId,
         outName,
-        promptOptimizer: cfg.promptOptimizer !== false,
+        promptOptimizer: variantPromptOptimizer(variant, cfg),
         submitMeta: {
-          provider: "hailuo",
+          provider: sceneProvider,
           adapter: adapterKey,
           model_tag: spec.modelTag,
           variant,
           scene: label,
           mode,
+          video_model: s.video_model,
         },
         _spec: spec,
         _mode: mode,
-        _provider: "hailuo" as ProviderKey,
-      });
+        _provider: sceneProvider,
+      };
+      if (sceneProvider === "firefly") fireflyJobs.push(job);
+      else hailuoJobs.push(job);
     }
   }
 
@@ -659,6 +696,8 @@ async function runPool(
   };
 
   const onResult = (r: { ok: boolean; job: PoolJob; meta?: Record<string, unknown>; error?: string }) => {
+    const sceneProvider = (r.job._provider as ProviderKey) || "hailuo";
+    const store = stores[sceneProvider];
     if (r.ok) {
       tally.produced += 1;
       let extra = "";
@@ -666,21 +705,34 @@ async function runPool(
         tally.softened += 1;
         extra = `  [S4 SOFTENED #${r.meta.soften_attempt}]`;
       }
-      log(`   [${r.job.variant}] OK -> ${r.job.outName}${extra}`);
+      log(`   [${sceneProvider}/${r.job.variant}] OK -> ${r.job.outName}${extra}`);
     } else {
       const rec = store.get(r.job.outName!);
       if (rec?.vid_id) {
         tally.submitted += 1;
-        log(`   [${r.job.variant}] BAŞARISIZ ama vid_id KAYITLI -> resume kurtarır: ${r.error}`);
+        log(
+          `   [${sceneProvider}/${r.job.variant}] BAŞARISIZ ama vid_id KAYITLI -> resume kurtarır: ${r.error}`,
+        );
       } else {
         tally.failed += 1;
-        log(`   [${r.job.variant}] BAŞARISIZ: ${r.error}`);
+        log(`   [${sceneProvider}/${r.job.variant}] BAŞARISIZ: ${r.error}`);
       }
     }
   };
 
-  log(`  [POOL] ${jobs.length} iş üretilecek`);
-  await pool.run(jobs, produce, onResult);
+  const runners: Promise<unknown>[] = [];
+  if (hailuoJobs.length) {
+    log(`  [POOL] Hailuo: ${hailuoJobs.length} iş ×${hailuoConcurrency}`);
+    const hailuoPool = new Pool(hailuoConcurrency, hailuoStore, hailuoPace);
+    runners.push(hailuoPool.run(hailuoJobs, produce, onResult));
+  }
+  if (fireflyJobs.length && fireflyStore) {
+    log(`  [POOL] Firefly/Kling: ${fireflyJobs.length} iş ×${fireflyConcurrency} (sıralı, Hailuo ile paralel)`);
+    const fireflyPool = new Pool(fireflyConcurrency, fireflyStore, fireflyPace);
+    runners.push(fireflyPool.run(fireflyJobs, produce, onResult));
+  }
+
+  await Promise.all(runners);
   summary(cfg, tally, byModel, log);
   return tally;
 }

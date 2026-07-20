@@ -19,6 +19,8 @@ export type GeminiRunOptions = {
   keyframesSource: KeyframesSource;
   scenesFilter?: string | null;
   apiKey: string;
+  /** Senaryo A: v3 = scene_description verbatim; geekfree → v1'e birleştir */
+  useSceneDescAsV3?: boolean;
 };
 
 const SELF_CHECK = true;
@@ -40,7 +42,9 @@ export async function generatePrompts(opts: GeminiRunOptions): Promise<number> {
   const scenes = allScenes.filter((s) => s.index >= lo && s.index <= hi);
 
   log("=".repeat(60));
-  log(`GEMINI DIRECT (TS) — optimizer-dostu v1/v2/v3 | sahne ${lo}-${hi} (${scenes.length})`);
+  log(
+    `GEMINI DIRECT (TS) — v1 optimize · v2 slow · v3${opts.useSceneDescAsV3 ? " orijinal" : " gag"} | sahne ${lo}-${hi} (${scenes.length})`,
+  );
   log("=".repeat(60));
 
   const client = new GoogleGenAI({ apiKey: opts.apiKey });
@@ -140,11 +144,20 @@ export async function generatePrompts(opts: GeminiRunOptions): Promise<number> {
         video_duration: vdurByIdx[idx],
         video_model: vmodelByIdx[idx],
         alternative_scene: altByIdx[idx],
+        geekfree: isGeekFree(s),
       };
 
-      const alt = parseAlternativeScene(altByIdx[idx] ?? s.alternative_scene);
-      if (alt < 2) entry.v2 = "";
-      if (alt < 3) entry.v3 = "";
+      let v3Translation = "";
+      if (opts.useSceneDescAsV3) {
+        // v3 = orijinal notun sadık İngilizce çevirisi (style tag / clip yok); boşsa Türkçe not
+        v3Translation = normalizeChar(String(r.v3 || "")).trim() || descByIdx[idx];
+        entry.v3 = v3Translation;
+        entry.source = isGeekFree(s) ? "scene_description+gemini_geek_v1" : "scene_description+gemini";
+      } else {
+        const alt = parseAlternativeScene(altByIdx[idx] ?? s.alternative_scene);
+        if (alt < 2) entry.v2 = "";
+        if (alt < 3) entry.v3 = "";
+      }
 
       if (SELF_CHECK) {
         const checked = await selfCheck(client, entry, Boolean(faceVis), videoChars);
@@ -161,12 +174,14 @@ export async function generatePrompts(opts: GeminiRunOptions): Promise<number> {
           false,
           Boolean(fv2),
         );
-        checked.entry.v3 = clip(
-          normalizeChar(String(checked.entry.v3 || "")),
-          MAX_V3,
-          true,
-          Boolean(fv2),
-        );
+        checked.entry.v3 = opts.useSceneDescAsV3
+          ? v3Translation
+          : clip(
+              normalizeChar(String(checked.entry.v3 || "")),
+              MAX_V3,
+              true,
+              Boolean(fv2),
+            );
         Object.assign(entry, checked.entry);
         if (checked.changed.length) {
           log(`      ✏️ self-check düzeltti: ${checked.changed.join(", ")}`);
@@ -195,7 +210,7 @@ export async function generatePrompts(opts: GeminiRunOptions): Promise<number> {
     log(`\n── Batch ${Math.floor(i / BATCH) + 1}: ${batch.map((s) => s.index).join(",")} ──`);
     let res: Record<string, unknown>[] | null = null;
     try {
-      res = await genBatch(client, vid, batch, paths, videoContext, charRefs, swapOn, false);
+      res = await genBatch(client, vid, batch, paths, videoContext, charRefs, swapOn, false, Boolean(opts.useSceneDescAsV3));
     } catch (e) {
       log(`   ❌ API hatası: ${e}`);
     }
@@ -215,7 +230,7 @@ export async function generatePrompts(opts: GeminiRunOptions): Promise<number> {
     log(`\n── GEEKFREE ${Math.floor(i) + 1}/${geekScenes.length}: sahne ${batch[0].index} (yalnız bu kesit) ──`);
     let res: Record<string, unknown>[] | null = null;
     try {
-      res = await genBatch(client, vid, batch, paths, videoContext, charRefs, swapOn, true);
+      res = await genBatch(client, vid, batch, paths, videoContext, charRefs, swapOn, true, Boolean(opts.useSceneDescAsV3));
     } catch (e) {
       log(`   ❌ GEEKFREE API hatası: ${e}`);
     }
@@ -248,7 +263,7 @@ export async function generatePrompts(opts: GeminiRunOptions): Promise<number> {
         `\n--- Scene ${String(p.index).padStart(3, "0")} [${p.frame_mode}]${p.geekfree ? " GEEKFREE" : ""} ---`,
         `V1: ${p.v1}`,
         `V2: ${p.v2}`,
-        `V3: ${p.v3}`,
+        `V3: ${opts.useSceneDescAsV3 ? `(orijinal→EN) ${p.v3 || p.scene_desc}` : p.v3}`,
       ]),
   ];
   fs.writeFileSync(path.join(paths.outputDir, "gemini_direct_review.txt"), review.join("\n"), "utf8");
