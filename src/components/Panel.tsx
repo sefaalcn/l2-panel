@@ -205,6 +205,7 @@ export default function Panel() {
   const [dropZip, setDropZip] = useState<File | null>(null);
   const [dropVideo, setDropVideo] = useState<File | null>(null);
   const [uploadSource, setUploadSource] = useState<KeyframesSource>("original");
+  const [uploadProjectName, setUploadProjectName] = useState("");
   const [keyframesSource, setKeyframesSource] = useState<KeyframesSource>("original");
   const [uploadMsg, setUploadMsg] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -405,8 +406,17 @@ export default function Panel() {
     return "";
   }, [dropScenes, dropZip, dropVideo]);
 
+  useEffect(() => {
+    if (derivedProject) setUploadProjectName(derivedProject);
+  }, [derivedProject]);
+
+  const uploadTargetExists = useMemo(
+    () => Boolean(uploadProjectName.trim() && projects.some((p) => p.name === uploadProjectName.trim())),
+    [uploadProjectName, projects],
+  );
+
   async function doUpload() {
-    const name = derivedProject.trim();
+    const name = uploadProjectName.trim() || derivedProject.trim();
     if (!name || !dropScenes || !dropZip) return;
     setUploading(true);
     setUploadMsg("");
@@ -598,9 +608,29 @@ export default function Panel() {
             <div className="section-t" style={{ margin: "0 0 8px" }}>
               Proje yükle{" "}
               <span style={{ textTransform: "none", fontWeight: 400, color: "var(--muted)" }}>
-                — ad JSON/videodan
+                — klasör adını sen belirle
               </span>
             </div>
+
+            <label className="fld" style={{ marginBottom: 10 }}>
+              <span>Proje klasör adı *</span>
+              <input
+                type="text"
+                placeholder="örn. Shapes_v2 — projects/ altına yazılır"
+                value={uploadProjectName}
+                onChange={(e) => setUploadProjectName(e.target.value)}
+              />
+              {derivedProject && derivedProject !== uploadProjectName.trim() && (
+                <div className="hint" style={{ marginTop: 4 }}>
+                  Dosyadan öneri: <span className="mono-sm">{derivedProject}</span>
+                </div>
+              )}
+              {uploadTargetExists && (
+                <div className="hint" style={{ marginTop: 4, color: "var(--warn)" }}>
+                  ⚠ Bu isimde proje zaten var — yükleme mevcut klasörün üzerine yazar.
+                </div>
+              )}
+            </label>
 
             <div className="section-t" style={{ margin: "0 0 6px" }}>Keyframe kaynağı</div>
             <div className="seg" role="group" aria-label="Keyframe kaynağı">
@@ -622,11 +652,9 @@ export default function Panel() {
               </button>
             </div>
 
-            {derivedProject ? (
-              <div className="derived">Proje: <b>{derivedProject}</b></div>
-            ) : (
-              <div className="hint" style={{ marginBottom: 8 }}>Proje adı JSON (veya ZIP/video) dosya adından alınır.</div>
-            )}
+            {derivedProject && !uploadProjectName.trim() ? (
+              <div className="derived">Öneri: <b>{derivedProject}</b></div>
+            ) : null}
 
             <FileDrop
               label="1. Scenes JSON"
@@ -653,7 +681,7 @@ export default function Panel() {
             <button
               className="primary"
               style={{ marginTop: 10 }}
-              disabled={uploading || !derivedProject || !dropScenes || !dropZip}
+              disabled={uploading || !(uploadProjectName.trim() || derivedProject) || !dropScenes || !dropZip}
               onClick={() => void doUpload()}
             >
               {uploading ? "Yükleniyor…" : "Yükle"}
