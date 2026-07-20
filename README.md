@@ -1,13 +1,15 @@
 # L2.5 — Next.js Üretim Paneli
 
-UI + API: **Next.js**. Üretim motoru: Python (`gemini_direct`, `video_router`, `l2_panel.l2_run`).
+UI + API + üretim motoru: **tamamı TypeScript** (Next.js panel + `src/lib/pipeline` motor).
+Python bağımlılığı Faz 6'da kaldırıldı; eski Python kaynakları git geçmişinde (`aa1558f` ve öncesi).
 
 ## Kurulum
 
 ```
 npm install
-pip install -r requirements.txt
 ```
+
+Gereksinim: Node 18+, PATH'te **ffmpeg** (video sıkıştırma için).
 
 ## Geliştirme
 
@@ -21,15 +23,24 @@ http://127.0.0.1:8751
 
 1. Scenes JSON + keyframes ZIP sürükle-bırak → **Yükle**
 2. Hailuo token / cookie / proje ID → **Başlat**
-3. Python `l2_run` arka planda çalışır (`projects/<ad>/`)
+3. TS worker arka planda çalışır (`npx tsx src/worker/l2-run.ts`, log: `projects/<ad>/.l2_run.log`)
+
+## Worker (elle)
+
+```
+npm run worker -- --project-path ./projects/MY_PROJECT --log ./projects/MY_PROJECT/.l2_run.log --variants v1
+```
+
+## Doğrulama
+
+```
+npx tsx scripts/smoke.ts   # routing / registry / dry-run / progress testleri (API çağrısı yok)
+```
 
 ## Vercel
 
-`vercel --prod` — Next.js framework. Uzun koşu için paneli yerelde çalıştır (Vercel’de dosya + subprocess sınırlı).
+`vercel --prod` — Next.js framework. Uzun koşu için paneli yerelde çalıştır (Vercel'de dosya + subprocess sınırlı).
 
-## Python (worker)
+## Mimari
 
-```
-python -m l2_panel.l2_run --help
-python -m l2_panel.worker   # eski Drive worker (opsiyonel)
-```
+Ayrıntı: `PIPELINE.md`

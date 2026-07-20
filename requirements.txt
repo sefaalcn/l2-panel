@@ -1,6 +1,0 @@
-# Python üretim motoru (gemini_direct / video_router / l2_run)
-google-genai
-anthropic
-requests
-oss2
-Pillow

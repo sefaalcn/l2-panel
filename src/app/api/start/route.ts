@@ -58,10 +58,9 @@ export async function POST(req: Request) {
   }
 
   const logf = path.join(proj, ".l2_run.log");
-  const py = process.env.L2_PYTHON || "python";
+  const workerScript = path.join(CODE_ROOT, "src", "worker", "l2-run.ts");
   const args = [
-    "-m",
-    "l2_panel.l2_run",
+    workerScript,
     "--project-path",
     proj,
     "--provider",
@@ -76,7 +75,8 @@ export async function POST(req: Request) {
   if (!promptOptimizer) args.push("--no-optimizer");
   args.push("--keyframes-source", keyframesSource);
 
-  const child = spawn(py, args, {
+  const npx = process.platform === "win32" ? "npx.cmd" : "npx";
+  const child = spawn(npx, ["tsx", ...args], {
     cwd: CODE_ROOT,
     env,
     detached: true,
@@ -99,5 +99,7 @@ export async function POST(req: Request) {
     status: "basliyor",
     log: logf,
     runtime: "local",
+    engine: "node",
+    worker: "tsx",
   });
 }

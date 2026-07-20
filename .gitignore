@@ -23,6 +23,7 @@ node_modules/
 .next/
 out/
 npm-debug.log*
+tsconfig.tsbuildinfo
 
 # vercel
 .vercel

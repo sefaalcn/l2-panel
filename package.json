@@ -6,22 +6,28 @@
     "dev": "next dev -p 8751",
     "build": "next build",
     "start": "next start -p 8751",
-    "lint": "next lint"
+    "lint": "next lint",
+    "worker": "tsx src/worker/l2-run.ts"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
+    "@google/genai": "^2.12.0",
     "adm-zip": "^0.5.16",
+    "ali-oss": "^6.22.0",
     "next": "^15.5.9",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "sharp": "^0.35.3"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.7",
+    "@types/ali-oss": "^6.23.3",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }
