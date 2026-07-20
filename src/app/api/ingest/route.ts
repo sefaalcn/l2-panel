@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
-import { materializeExport, parseKeyframesSource } from "@/lib/ingest";
+import { materializeExport, parseKeyframesSource, safeProjectName } from "@/lib/ingest";
 import { PROJECTS_ROOT } from "@/lib/config";
+import { activeRun } from "@/lib/runstate";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -46,6 +47,15 @@ export async function POST(req: Request) {
     const keyframesSource = parseKeyframesSource(form.get("keyframes_source"));
     if (!project || !(scenes instanceof File) || !(zip instanceof File)) {
       return NextResponse.json({ detail: "project, scenes, keyframes_zip gerekli" }, { status: 400 });
+    }
+
+    const safeName = safeProjectName(project);
+    const active = activeRun();
+    if (active?.project === safeName) {
+      return NextResponse.json(
+        { detail: `${safeName} şu an üretiliyor — önce koşuyu durdurun, sonra yükleyin` },
+        { status: 409 },
+      );
     }
 
     const scenesBytes = Buffer.from(await scenes.arrayBuffer());

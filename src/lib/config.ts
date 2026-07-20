@@ -30,7 +30,7 @@ export const MODELS = {
       },
       {
         key: "project",
-        label: "Hailuo Proje ID",
+        label: "Proje ID",
         target: { type: "file", name: "hailuo_project.txt", env: "HAILUO_PROJECT_FILE" },
         secret: false,
         required: true,

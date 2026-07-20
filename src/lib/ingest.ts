@@ -7,6 +7,44 @@ export type KeyframesSource = "original" | "swapped";
 
 export const KEYFRAMES_SOURCE_FILE = ".l2_keyframes_source";
 
+/** Windows — dosya kilitliyse (üretim/AV) retry + atomic rename */
+function sleepMs(ms: number) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    /* kısa retry beklemesi */
+  }
+}
+
+function writeBytesSafe(filePath: string, data: Buffer) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.upload.${process.pid}.${Date.now()}.tmp`;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      fs.writeFileSync(tmp, data);
+      try {
+        if (fs.existsSync(filePath)) fs.rmSync(filePath, { force: true });
+      } catch {
+        /* mevcut dosya kilitli olabilir — rename dene */
+      }
+      fs.renameSync(tmp, filePath);
+      return;
+    } catch (e) {
+      lastErr = e;
+      try {
+        if (fs.existsSync(tmp)) fs.rmSync(tmp, { force: true });
+      } catch {
+        /* */
+      }
+      if (attempt < 3) sleepMs(150 * (attempt + 1));
+    }
+  }
+  const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  throw new Error(
+    `Dosya yazılamadı: ${path.basename(filePath)} (${msg}) — üretim koşuyorsa durdurun veya dosyayı kapatın`,
+  );
+}
+
 export function safeProjectName(name: string): string {
   let n = (name || "").trim().replace(/[<>:"/\\|?*]/g, "_").replace(/^\.+|\.+$/g, "");
   if (!n) n = "project";
@@ -74,8 +112,7 @@ export function materializeExport(opts: {
     const mapped = remapZipEntry(entry.entryName, targetRoot);
     if (!mapped) continue;
     const target = path.join(root, mapped);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, entry.getData());
+    writeBytesSafe(target, entry.getData());
     extracted += 1;
   }
 
@@ -84,7 +121,7 @@ export function materializeExport(opts: {
     let vname = opts.videoName || `${project}.mp4`;
     vname = path.basename(vname);
     if (!/\.(mp4|mov|webm|mkv)$/i.test(vname)) vname = `${project}.mp4`;
-    fs.writeFileSync(path.join(root, vname), opts.videoBytes);
+    writeBytesSafe(path.join(root, vname), opts.videoBytes);
     videoWritten = vname;
   }
 

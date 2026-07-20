@@ -205,7 +205,6 @@ export default function Panel() {
   const [dropZip, setDropZip] = useState<File | null>(null);
   const [dropVideo, setDropVideo] = useState<File | null>(null);
   const [uploadSource, setUploadSource] = useState<KeyframesSource>("original");
-  const [uploadProjectName, setUploadProjectName] = useState("");
   const [keyframesSource, setKeyframesSource] = useState<KeyframesSource>("original");
   const [uploadMsg, setUploadMsg] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -406,17 +405,8 @@ export default function Panel() {
     return "";
   }, [dropScenes, dropZip, dropVideo]);
 
-  useEffect(() => {
-    if (derivedProject) setUploadProjectName(derivedProject);
-  }, [derivedProject]);
-
-  const uploadTargetExists = useMemo(
-    () => Boolean(uploadProjectName.trim() && projects.some((p) => p.name === uploadProjectName.trim())),
-    [uploadProjectName, projects],
-  );
-
   async function doUpload() {
-    const name = uploadProjectName.trim() || derivedProject.trim();
+    const name = derivedProject.trim();
     if (!name || !dropScenes || !dropZip) return;
     setUploading(true);
     setUploadMsg("");
@@ -495,15 +485,6 @@ export default function Panel() {
     return () => clearTimeout(id);
   }, [creds.token, creds.ff_token, modelKey]);
 
-  useEffect(() => {
-    const v = creds.project?.trim();
-    if (!v || modelKey !== "hailuo") return;
-    const id = setTimeout(() => {
-      void jpost("/api/save-project", { value: v });
-    }, 600);
-    return () => clearTimeout(id);
-  }, [creds.project, modelKey]);
-
   function startPolling(name: string) {
     if (pollRef.current) clearInterval(pollRef.current);
     const tick = async () => {
@@ -512,12 +493,19 @@ export default function Panel() {
         setProgress(d);
         void loadOutputs(name, modelKey);
         const phase = d.phase as string | null;
+        const alive = d.alive !== false;
         if (!phase || ["bitti", "hata", "durduruldu"].includes(phase)) {
           if (pollRef.current) clearInterval(pollRef.current);
           pollRef.current = null;
           setCurrent(null);
           setLiveOn(false);
           setLiveTxt(phase || "tamam");
+        } else if (!alive) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          setCurrent(null);
+          setLiveOn(false);
+          setLiveTxt("hata");
         } else {
           setLiveOn(true);
           setLiveTxt(phase);
@@ -608,29 +596,9 @@ export default function Panel() {
             <div className="section-t" style={{ margin: "0 0 8px" }}>
               Proje yükle{" "}
               <span style={{ textTransform: "none", fontWeight: 400, color: "var(--muted)" }}>
-                — klasör adını sen belirle
+                — ad JSON/videodan
               </span>
             </div>
-
-            <label className="fld" style={{ marginBottom: 10 }}>
-              <span>Proje klasör adı *</span>
-              <input
-                type="text"
-                placeholder="örn. Shapes_v2 — projects/ altına yazılır"
-                value={uploadProjectName}
-                onChange={(e) => setUploadProjectName(e.target.value)}
-              />
-              {derivedProject && derivedProject !== uploadProjectName.trim() && (
-                <div className="hint" style={{ marginTop: 4 }}>
-                  Dosyadan öneri: <span className="mono-sm">{derivedProject}</span>
-                </div>
-              )}
-              {uploadTargetExists && (
-                <div className="hint" style={{ marginTop: 4, color: "var(--warn)" }}>
-                  ⚠ Bu isimde proje zaten var — yükleme mevcut klasörün üzerine yazar.
-                </div>
-              )}
-            </label>
 
             <div className="section-t" style={{ margin: "0 0 6px" }}>Keyframe kaynağı</div>
             <div className="seg" role="group" aria-label="Keyframe kaynağı">
@@ -652,9 +620,11 @@ export default function Panel() {
               </button>
             </div>
 
-            {derivedProject && !uploadProjectName.trim() ? (
-              <div className="derived">Öneri: <b>{derivedProject}</b></div>
-            ) : null}
+            {derivedProject ? (
+              <div className="derived">Proje: <b>{derivedProject}</b></div>
+            ) : (
+              <div className="hint" style={{ marginBottom: 8 }}>Proje adı JSON (veya ZIP/video) dosya adından alınır.</div>
+            )}
 
             <FileDrop
               label="1. Scenes JSON"
@@ -681,7 +651,7 @@ export default function Panel() {
             <button
               className="primary"
               style={{ marginTop: 10 }}
-              disabled={uploading || !(uploadProjectName.trim() || derivedProject) || !dropScenes || !dropZip}
+              disabled={uploading || !derivedProject || !dropScenes || !dropZip}
               onClick={() => void doUpload()}
             >
               {uploading ? "Yükleniyor…" : "Yükle"}
@@ -805,11 +775,6 @@ export default function Panel() {
               />
               {(cr.key === "token" || cr.key === "ff_token") && creds[cr.key] && (
                 <div className="mono-sm" style={{ marginTop: 6 }}>{mask(creds[cr.key])}</div>
-              )}
-              {cr.key === "project" && modelKey === "hailuo" && (
-                <div className="hint" style={{ marginTop: 6 }}>
-                  Hailuo web → proje URL&apos;indeki ID (sayılar). Başlatınca hailuo_project.txt olarak kaydedilir.
-                </div>
               )}
               {cr.key === "ff_token" && (
                 <div className="hint" style={{ marginTop: 6 }}>

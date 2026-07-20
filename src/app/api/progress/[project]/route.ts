@@ -4,7 +4,7 @@ import path from "path";
 import { PROJECTS_ROOT } from "@/lib/config";
 import { readKeyframesSource } from "@/lib/ingest";
 import { resolveRouterPaths } from "@/lib/pipeline/router/resolve";
-import { pidAlive, readRunstate } from "@/lib/runstate";
+import { pidAlive, readRunstate, clearRunstate } from "@/lib/runstate";
 
 export const dynamic = "force-dynamic";
 
@@ -75,6 +75,13 @@ export async function GET(
     phase = rs.status || null;
     alive = pidAlive(rs.pid);
     runError = rs.error ? String(rs.error) : null;
+    if (!alive && phase && !["bitti", "hata", "durduruldu"].includes(phase)) {
+      phase = "hata";
+      runError =
+        runError ||
+        "Worker durdu (beklenmedik) — .l2_run.log dosyasına bakın veya panelden Durdur ile temizleyin";
+      clearRunstate();
+    }
   }
 
   let logTail: string[] = [];

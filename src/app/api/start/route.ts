@@ -88,9 +88,6 @@ export async function POST(req: Request) {
       if (cred.key === "ff_token") {
         fs.writeFileSync(path.join(CODE_ROOT, "firefly_token.txt"), val, "utf8");
       }
-      if (cred.key === "project") {
-        fs.writeFileSync(path.join(CODE_ROOT, "hailuo_project.txt"), val, "utf8");
-      }
     }
   }
 
