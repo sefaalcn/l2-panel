@@ -1,5 +1,8 @@
 import type { PipelineEngine } from "../types";
+import fs from "fs";
+import path from "path";
 import { resolveApiKey } from "@/lib/api-keys";
+import { withProviderLock } from "@/lib/provider-lock";
 import {
   findScenesJson,
   loadScenesJsonFile,
@@ -13,21 +16,29 @@ export const nodeEngine: PipelineEngine = {
   name: "node",
 
   async runPromptGeneration(opts) {
-    const apiKey = resolveApiKey("GEMINI_API_KEY", opts.env);
-    if (!apiKey?.trim()) {
-      console.error("❌ GEMINI_API_KEY gerekli (v1 optimize + v2 slow motion)");
-      return 1;
-    }
+    const apiKey = resolveApiKey("GEMINI_API_KEY", opts.env) || "";
     const scenesFile = findScenesJson(opts.projectPath);
     const scenes = scenesFile ? loadScenesJsonFile(scenesFile) : [];
+    const project = path.basename(opts.projectPath);
+    const log = (s: string) => {
+      try {
+        fs.appendFileSync(opts.logPath, `${s}\n`, "utf8");
+      } catch {
+        /* */
+      }
+      console.log(s);
+    };
 
-    return generatePrompts({
-      projectPath: opts.projectPath,
-      keyframesSource: opts.keyframesSource,
-      scenesFilter: opts.scenes,
-      apiKey,
-      useSceneDescAsV3: scenesHaveDescriptions(scenes),
-    });
+    return withProviderLock("gemini", project, log, () =>
+      generatePrompts({
+        projectPath: opts.projectPath,
+        keyframesSource: opts.keyframesSource,
+        scenesFilter: opts.scenes,
+        apiKey,
+        useSceneDescAsV3: scenesHaveDescriptions(scenes),
+        forceRegenerate: Boolean(opts.regeneratePrompts),
+      }),
+    );
   },
 
   async runVideoProduction(opts, _projectName) {

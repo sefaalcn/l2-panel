@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import { materializeExport, parseKeyframesSource, safeProjectName } from "@/lib/ingest";
 import { PROJECTS_ROOT } from "@/lib/config";
-import { activeRun } from "@/lib/runstate";
+import { getActiveRun } from "@/lib/runstate";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -50,8 +50,8 @@ export async function POST(req: Request) {
     }
 
     const safeName = safeProjectName(project);
-    const active = activeRun();
-    if (active?.project === safeName) {
+    const active = getActiveRun(safeName);
+    if (active) {
       return NextResponse.json(
         { detail: `${safeName} şu an üretiliyor — önce koşuyu durdurun, sonra yükleyin` },
         { status: 409 },

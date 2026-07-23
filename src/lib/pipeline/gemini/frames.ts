@@ -16,15 +16,18 @@ export function findFrameIn(
   return null;
 }
 
+/**
+ * Seçilen kaynağa göre kare bul — swapped↔original arasında sessiz fallback YOK.
+ */
 export function findFrame(
   paths: ProjectPaths,
   label: string,
   frameType: "first" | "last",
 ): string | null {
-  return (
-    findFrameIn(paths.keyframesSwappedDir, label, frameType) ||
-    findFrameIn(paths.keyframesOrigDir, label, frameType)
-  );
+  if (paths.keyframesSource === "swapped") {
+    return findFrameIn(paths.keyframesSwappedDir, label, frameType);
+  }
+  return findFrameIn(paths.keyframesOrigDir, label, frameType);
 }
 
 export function findFramePair(
@@ -33,16 +36,18 @@ export function findFramePair(
   frameType: "first" | "last",
   swapOn: boolean,
 ): { swap: string | null; orig: string | null } {
-  const fpSwap = findFrame(paths, label, frameType);
+  const fpPrimary = findFrame(paths, label, frameType);
   let fpOrig: string | null = null;
+  // Identity mapping: swapped koşusunda orijinal kareyi ayrıca göster
   if (
     swapOn &&
+    paths.keyframesSource === "swapped" &&
     paths.keyframesOrigDir !== paths.keyframesSwappedDir
   ) {
     const cand = findFrameIn(paths.keyframesOrigDir, label, frameType);
-    if (cand && cand !== fpSwap) fpOrig = cand;
+    if (cand && cand !== fpPrimary) fpOrig = cand;
   }
-  return { swap: fpSwap, orig: fpOrig };
+  return { swap: fpPrimary, orig: fpOrig };
 }
 
 export async function encodeImage(filePath: string): Promise<Buffer | null> {

@@ -41,7 +41,11 @@ export function clip(
   let t = text;
   t = t.replace(/\s*3[dD]\s+(children'?s|animated)?\s*cartoon style\.?/gi, "");
   t = t.replace(/,?\s*(soft|warm|bright)?\s*(outdoor|ambient)?\s*lighting[^.,]*/gi, "");
-  t = t.replace(/\b(Vibrant colorful 3D cartoon[^.]*smooth shading)/gi, "");
+  // Eski otomatik stil etiketi tekrarını temizle (manuel eklenen ifadelere dokunma)
+  t = t.replace(
+    /\b(Vibrant colorful 3D cartoon[^.]*?(?:smooth shading|bright animation))/gi,
+    "",
+  );
   t = t.replace(/\s*--[a-zA-Z]+\s+[0-9:.]+/g, "");
   t = t.replace(/\s*\[\s*STYLE[^\]]*\]/gi, "");
   t = t.replace(/ ,/g, ",").replace(/  +/g, " ").trim().replace(/,$/, "").trim();

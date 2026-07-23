@@ -18,6 +18,8 @@ export interface RunOptions {
   concurrency?: number | null;
   scenes?: string | null;
   noOptimizer?: boolean;
+  /** true → mevcut promptları silip Gemini ile baştan üret */
+  regeneratePrompts?: boolean;
   keyframesSource: KeyframesSource;
   logPath: string;
   env: NodeJS.ProcessEnv;

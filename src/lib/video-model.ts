@@ -59,7 +59,7 @@ export function fireflyAdapterFromVideoModel(
     return "kling2.5";
   }
   if (n === "kling" || n.startsWith("kling_")) {
-    return "kling2.5";
+    return "kling3.0";
   }
   if (n.includes("runway") || n.includes("gen4") || n.includes("gen_4")) {
     return "runway4.5";

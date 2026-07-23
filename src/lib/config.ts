@@ -7,6 +7,42 @@ export const PROJECTS_ROOT = path.resolve(
 export const PANEL_DIR = path.join(CODE_ROOT, "l2_panel");
 export const RUNSTATE_PATH = path.join(PANEL_DIR, ".l2_active_run.json");
 
+/** Scene Studio / JSON video_model → Firefly 3p adaptörleri (720p) */
+export const FIREFLY_VIDEO_MODELS = [
+  {
+    id: "kling_3",
+    aliases: ["kling_3_0", "kling_3_0_pro", "kling3", "kling_v3"],
+    label: "Kling 3.0",
+    resolution: "720p",
+    adapter: "kling3.0",
+    modes: ["start_only", "both", "end_only"],
+  },
+  {
+    id: "ray_3_14_pro",
+    aliases: ["ray_3_14", "ray314", "luma_ray_3_14"],
+    label: "Ray 3.14",
+    resolution: "720p",
+    adapter: "ray3.14",
+    modes: ["both", "end_only"],
+  },
+  {
+    id: "kling_2_5_turbo",
+    aliases: ["kling_25", "kling2_5"],
+    label: "Kling 2.5 Turbo",
+    resolution: "720p",
+    adapter: "kling2.5",
+    modes: ["start_only"],
+  },
+  {
+    id: "runway_gen4_5",
+    aliases: ["gen4_5", "runway_4_5"],
+    label: "Runway Gen-4.5",
+    resolution: "720p",
+    adapter: "runway4.5",
+    modes: ["start_only"],
+  },
+] as const;
+
 export const MODELS = {
   hailuo: {
     label: "Hailuo",
@@ -42,7 +78,7 @@ export const MODELS = {
         label: "Hailuo Prompt Optimizer",
         type: "toggle",
         default: true,
-        note: "Açık: Hailuo promptu kendi optimize eder (önerilen). Kapalı: JSON'daki metin aynen gider.",
+        note: "Hailuo sitesindeki Prompt Optimizer (API useOriginPrompt). Açık: Hailuo metni kendi iyileştirir — v1/v2 için. Kapalı: JSON aynen gider. v3 her zaman kapalı.",
       },
     ],
   },
@@ -53,25 +89,10 @@ export const MODELS = {
     credentials: [
       {
         key: "ff_token",
-        label: "Firefly Token (Bearer)",
+        label: "Firefly Curl (F12 → Copy as cURL)",
         target: { type: "file", name: "firefly_token.txt", env: "FIREFLY_TOKEN_FILE" },
         secret: true,
         required: true,
-      },
-      {
-        key: "ff_arp",
-        label: "arp (opsiyonel)",
-        target: { type: "file", name: "firefly_arp.txt", env: "FIREFLY_ARP_FILE" },
-        secret: true,
-        required: false,
-        autoFromFile: true,
-      },
-      {
-        key: "ff_nonce",
-        label: "nonce (opsiyonel)",
-        target: { type: "file", name: "firefly_nonce.txt", env: "FIREFLY_NONCE_FILE" },
-        secret: true,
-        required: false,
         autoFromFile: true,
       },
     ],

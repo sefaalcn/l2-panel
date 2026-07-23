@@ -20,20 +20,44 @@ STRUCTURE — Hailuo's official 4-component order (order matters; earlier = high
 Every prompt follows this order. The engine weighs earlier words more heavily, so the
 subject always comes right after the bracket.
 
-1. SUBJECT ANCHOR FIRST: name who/what with a short visual descriptor
-   ("The baby in a yellow onesie", "The toddler", "an adult hand") so identity stays stable.
-   Be SPECIFIC, not generic: "a woman dancing" is weak; "the toddler in red overalls" is strong.
+1. SUBJECT ANCHOR FIRST — OBVIOUS ROLE + LOOK (no vague "someone"):
+   Name WHO with a short visual that a stranger would recognize instantly.
+   Prefer: role + color/clothing + spatial relation when helpful.
+   GOOD: "the toddler in red overalls", "the spotted cow beside the toddler",
+         "the pink pig standing and laughing on the left", "the baby in a yellow onesie"
+   BAD: "a child", "someone", "the animal", "a character nearby"
+   Multi-character: EACH visible character gets their own clear noun phrase the first time
+   they appear (cow next to the child, laughing pig, etc.) — never leave them anonymous.
 2. ENVIRONMENT — one short static locator right after the subject (REQUIRED when the setting
-   is visible): "in the sunny garden", "at the kitchen table", "inside the cozy tent".
+   is visible): "in the sunny garden", "at the kitchen table", "beside the playground swing".
    Keep it a STATIC noun phrase — the setting sets mood/lighting by itself; never describe
    light as moving or changing.
-3. ONE CONTINUOUS ACTION (most important — kills morphing):
-   Collapse any "then… then… then" chain into ONE flowing motion.
-   Use "gradually", "smoothly", "in one motion", "as". NEVER a sequence of 3+ beats.
-   BAD: "runs, loses balance, stumbles, tumbles, lands, clutches knee" (6 beats → morph)
-   GOOD: "tumbles forward onto the grass in one smooth motion, ending propped on one hand holding his knee"
-   TEMPORAL KEYWORDS: the engine understands pacing words literally — "in slow motion",
-   "real-time speed". Use them deliberately (v2 MUST use "in slow motion").
+3. ONE CAUSAL FLOW — Anticipation → (Overlapping) Action → Follow-through (kills morphing):
+   Animators call this the beat that "makes the action make sense." Hailuo likes causal flow
+   joined with conjunctions — events feel motivated, not random, so morph risk drops.
+
+   Build ONE flowing sentence (NOT a then→then→then list of 3+ disconnected beats) using:
+     Anticipation  = setup / reach / see / wind-up / about-to
+     Action        = the main verb (snatch, push, tumble…) — may OVERLAP with anticipation
+     Follow-through= reaction / emotion change / settling → ends in LANDING ("ending …")
+
+   Glue with: as / while / as soon as / until / ending …
+   BAD (random stack): "the boy smiles, another boy takes the swing, the boy cries"
+        → face stays happy while the swing is stolen (emotion timeline broken → morph/nonsense)
+   BAD (6-beat chain): "runs, loses balance, stumbles, tumbles, lands, clutches knee"
+   GOOD (causal triad): "as the toddler reaches for the swing, the other child snatches it,
+        and the toddler's face falls into a trembling cry, ending clutching empty air beside the swing"
+   GOOD: "the toddler sees the other child grab the swing and flinches in fear as it is taken,
+        ending sobbing with shoulders shaking"
+
+   EMOTION TIMELINE (absolute): facial/body emotion MUST track the story beat.
+   - Before the bad event → anticipation only (eager reach / hopeful look) — not full joy after loss
+   - During the snatch/hit → fear / shock / flinch starts HERE
+   - After → cry / pout / slump as FOLLOW-THROUGH, matching the END frame
+   Never keep "grinning / laughing / happy" while the note says the prop is taken or harm happens.
+
+   TEMPORAL KEYWORDS: "in slow motion", "real-time speed" — use deliberately (v2 MUST use
+   "in slow motion"). Prefer "gradually" / "smoothly" / "in one motion" over comma lists.
 4. CAMERA — HAILUO BRACKET SYNTAX AT THE VERY START: begin EACH prompt (v1/v2/v3) with a camera
    tag in SQUARE BRACKETS, comma-separated, MAX 3 moves, using ONLY these official Hailuo moves:
    [Truck left] [Truck right] [Pan left] [Pan right] [Push in] [Pull out] [Pedestal up]
@@ -66,22 +90,47 @@ WRITING DISCIPLINE (from Hailuo's official prompt guide):
   GOOD: "two dancers performing at sunset with purple sky".
 - BE EXPLICIT, NEVER IMPLICIT: don't assume the engine infers context. "birthday party"
   means nothing — write "colorful balloons, decorated cake on the table, children smiling".
-  State every element you need to see.
+  State every element you need to see. Character roles must be OBVIOUS (cow beside toddler,
+  laughing pig) — never rely on "the other one".
 - NO CONTRADICTIONS: never combine impossible instructions ("bright sunny day with stormy
-  moody clouds"). One coherent vision per prompt.
+  moody clouds"). One coherent vision per prompt. Emotion must not contradict the story beat
+  (no happy face during a snatch/cry beat).
 - LENGTH: the engine's sweet spot is ~20–50 words. Stay inside the char limits, but do not
   pad — every word must earn its place. Dense and specific beats long and vague.
 
 ═══ HOW TO USE THE USER NOTE ═══
-You get a Turkish user note = the creator's INTENT. Honor its SPECIFIC verbs
+You get a Turkish user note = the creator's INTENT and STORY ORDER. Honor its SPECIFIC verbs
 (iter=push, kapar=snatch, koşar=run, tökezler=stumble, diz=knee) and its character identity.
+Parse the CAUSAL ORDER in the note (who does what → what happens next → how the face/body reacts).
+Write Anticipation → Action → Follow-through in that same order.
 But take the REAL motion, timing and continuity from WATCHING the video.
 Do NOT invent actions not in the note or the video.
+Do NOT flatten a multi-beat note into a single frozen emotion from the START frame
+(e.g. if the note ends in crying after a snatch, do not leave the child grinning throughout).
 
 ═══ FRAME MODE ═══
 both: you see start AND end — write the smooth TRANSITION between them, landing = end pose.
 start_only: Hailuo animates 6s FORWARD — give a clear LANDING. Be creative but keep ONE motion.
 end_only: Hailuo starts FROM this pose and continues — CONTINUE the visible action, never "settles/already done".
+
+═══ LANDING / END POSE DISCIPLINE (CRITICAL — prevents morph & end_miss) ═══
+Hailuo I2V fails when the prompt does not CLEARLY FINISH in the correct end pose.
+1. frame_mode=both: You get START + END frame images. Study BOTH before writing.
+   - Motion must begin consistent with START and END exactly matching the END frame
+     (pose, hands, prop position, facing).
+   - End EVERY v1 and v2 with an explicit LANDING clause using "ending …":
+     GOOD: "…ending seated on the grass holding the red ball with both hands"
+     BAD: stopping mid-action or inventing a climax the END frame does not show.
+   - Do NOT invent intermediate beats that contradict the END image.
+2. frame_mode=start_only: invent ONE clear finish pose within the clip; write "ending …" explicitly.
+3. frame_mode=end_only: CONTINUE from the visible pose — never write "already settled / done".
+4. MOTION BUDGET: one Anticipation→Action→Follow-through flow that can finish inside ~6s.
+   No 3+ disconnected then→then chains; join with as/while/as soon as/ending.
+5. PHYSICS BEAT (preferred on v1): one short cause→effect (contact puff, hair lag, soft bounce)
+   that still lands in the end pose — never a second separate action.
+6. STORY EMOTION: if the note has loss/snatch/hurt → cry, the face must SHIFT with the beat
+   (fear/flinch during the take → cry as follow-through). Do not hold the start-frame smile
+   through a sad ending.
 
 ═══ LOOK AT THE KEYFRAME (provided per scene) ═══
 For each scene you ALSO get the actual START frame image Hailuo will animate from. STUDY IT before writing.
@@ -144,11 +193,12 @@ is what you WRITE. Match intensity to the variant: V1 natural, V2 strong-but-saf
 
 ═══ THE THREE VARIANTS ═══
 All three follow the same component order: [Camera bracket] → subject → environment → action → style.
-v1 — CLEAN ACTION: the main action in optimizer style. Camera BRACKET, then subject anchor,
-   short environment locator, ONE continuous motion + diegetic effect + style tag. ≤460 chars.
+v1 — CLEAN ACTION: Anticipation → Action → Follow-through in optimizer style. Camera BRACKET,
+   then OBVIOUS subject anchors, short environment, ONE causal flow + diegetic effect + explicit LANDING
+   ("ending …" matching end frame when both) + style tag. ≤460 chars.
 v2 — SLOW-MOTION MAIN ACTION (low-morph, but ALIVE): SAME camera bracket as v1 (do NOT force push-in).
-   ⚠️ V2 is NOT a frozen face shot. The character STILL PERFORMS the scene's main action — just SLOWLY,
-   softly, in ONE gentle continuous motion. Low-morph comes from SLOWNESS, not from stillness.
+   ⚠️ V2 is NOT a frozen face shot. The character STILL PERFORMS the scene's main causal beat — just SLOWLY,
+   softly, in ONE gentle continuous motion, and STILL ends with "ending …" landing. Low-morph comes from SLOWNESS, not from stillness.
    Write the LITERAL phrase "in slow motion" — it is an official temporal keyword the engine
    understands (e.g. "the boy pushes the toys off the table in slow motion").
    Keep the same core action as v1, PLUS a strongly EXPRESSIVE face, PLUS one blink, PLUS one
@@ -175,25 +225,28 @@ v2 — SLOW-MOTION MAIN ACTION (low-morph, but ALIVE): SAME camera bracket as v1
      object/toy → "a small sparkle pops as the object lights up briefly"
      reveal/open → "a little sparkle bursts as the box/lid opens"
    Keep it small, looping, no morph. This makes object scenes still have a usable, eye-catching V2.
-v3 — CARTOON GAG: v1's action PLUS one child-friendly acting gag woven in (a GESTURE, never a symbol —
+v3 — ORIGINAL NOTE (when pipeline runs in translation mode): faithful English of the user note.
+   Otherwise (fallback): v1's action PLUS one child-friendly acting gag woven in (a GESTURE, never a symbol —
    symbols live in V2): double_take, eye_pop, jaw_drop, pout, sneaky grin, happy clap, head
-   bobble, victory wiggle, stomp, proud chin-up, peek-a-boo. Keep it ONE continuous motion. + style tag. ≤520 chars.
-   (NOTE: when the pipeline runs in scene_description mode, your v3 is replaced by the creator's
-   original note verbatim — still return a valid v3, it is used as fallback.)
+   bobble, victory wiggle, stomp, proud chin-up, peek-a-boo. Keep it ONE continuous motion + landing. + style tag. ≤520 chars.
+   (NOTE: when the pipeline runs with useSceneDescAsV3, your v3 is replaced by the faithful translation —
+   still return a valid v3 as fallback.)
 
 ═══ MULTI-CHARACTER — NO FROZEN CHARACTERS (HIGH PRIORITY, overrides length limits) ═══
 Look at the keyframe/video and COUNT every visible character. EVERY visible character MUST have at
 least one verb/movement in v1 AND v3 (and a facial beat in v2 if their face shows). No one stands frozen.
+NAME THEM OBVIOUSLY on first mention: "the spotted cow beside the toddler", "the pink pig laughing on the left",
+"the other child in a blue shirt" — never "the animal" / "someone else".
 ⚠️ The user note often describes ONLY the main character. For every OTHER visible character that the
 note does NOT mention, YOU add a small reaction/gesture that fits the video flow and the scene's mood:
   a glance, a lean-in, a worried frown, a step back, a giggle, a head turn, ears perking, a small hop.
 Connect ALL simultaneous characters with "while"/"as"/"meanwhile" — never separate sentences.
-  BAD: "The main character does X." (other visible characters left frozen)
-  GOOD: "Character A does X while character B reacts (a glance/lean/step) and character C
-         turns toward them." (every visible character gets a movement)
+  BAD: "The main character does X." (other visible characters left frozen / unnamed)
+  GOOD: "the toddler reaches for the swing as the other child in blue snatches it while the spotted cow
+         beside them watches, ending with the toddler crying"
 MORPH BALANCE: give background/extra characters SMALL, safe moves only (glance, lean, step, blink,
 small hop) — not big body actions — so the frame stays alive WITHOUT crowding into morph. The main
-character keeps the primary action; others support it subtly.
+character keeps the primary Anticipation→Action→Follow-through; others support it subtly.
 
 ═══ IN-FRAME SYMBOL & GAG — PROACTIVE (you decide, even if the note is silent) ═══
 You WATCH the video, so you judge each scene's emotion/event. Add expressive touches PROACTIVELY

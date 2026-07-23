@@ -11,6 +11,95 @@ export type ResolvedPaths = {
   progressFile: string;
 };
 
+/** ZIP bazen keyframes/proje_keyframes/.../keyframes/scene_XXX diye iç içe gelir. */
+export function hasSceneDirs(dir: string): boolean {
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .some((e) => e.isDirectory() && /^scene_/i.test(e.name));
+  } catch {
+    return false;
+  }
+}
+
+function dirNonEmpty(dir: string): boolean {
+  try {
+    return fs.existsSync(dir) && fs.readdirSync(dir).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+export function resolveKeyframesLeaf(dir: string, depth = 0): string {
+  if (!fs.existsSync(dir) || depth > 6) return dir;
+  if (hasSceneDirs(dir)) return dir;
+  let ents: fs.Dirent[];
+  try {
+    ents = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return dir;
+  }
+  const nestedNamed = ents.find(
+    (e) => e.isDirectory() && /keyframes/i.test(e.name),
+  );
+  if (nestedNamed) {
+    const cand = resolveKeyframesLeaf(path.join(dir, nestedNamed.name), depth + 1);
+    if (hasSceneDirs(cand)) return cand;
+  }
+  const onlyDirs = ents.filter((e) => e.isDirectory());
+  if (onlyDirs.length === 1) {
+    const cand = resolveKeyframesLeaf(path.join(dir, onlyDirs[0].name), depth + 1);
+    if (hasSceneDirs(cand)) return cand;
+  }
+  return dir;
+}
+
+/**
+ * Seçilen kaynağın gerçek keyframes kökü.
+ * Swapped seçiliyse keyframes_swapped yok/boş → HATA (orijinale sessiz düşmez).
+ */
+export function resolveActiveKeyframesDir(
+  root: string,
+  source: KeyframesSource = "original",
+): string {
+  const label = source === "swapped" ? "keyframes_swapped" : "keyframes";
+  const preferred = path.join(path.resolve(root), label);
+  if (!fs.existsSync(preferred)) {
+    if (source === "swapped") {
+      throw new Error(
+        "keyframes_swapped/ yok — Swapped seçildi. ZIP'i «Swapped» olarak yükle veya koşuda «Orijinal» seç.",
+      );
+    }
+    throw new Error("keyframes/ yok — Orijinal keyframes ZIP yükle.");
+  }
+  const leaf = resolveKeyframesLeaf(preferred);
+  if (!hasSceneDirs(leaf) && !dirNonEmpty(leaf)) {
+    if (source === "swapped") {
+      throw new Error(
+        "keyframes_swapped/ boş — Swapped ZIP yükle veya koşuda «Orijinal» seç.",
+      );
+    }
+    throw new Error("keyframes/ boş — Orijinal keyframes ZIP yükle.");
+  }
+  return leaf;
+}
+
+/** Orijinal / swapped klasörlerini ayrı tut (Gemini identity mapping için). */
+export function resolveKeyframeRoots(root: string): {
+  orig: string;
+  swapped: string | null;
+} {
+  const base = path.resolve(root);
+  const origRaw = path.join(base, "keyframes");
+  const swapRaw = path.join(base, "keyframes_swapped");
+  const orig = fs.existsSync(origRaw) ? resolveKeyframesLeaf(origRaw) : origRaw;
+  if (!fs.existsSync(swapRaw)) return { orig, swapped: null };
+  const swapped = resolveKeyframesLeaf(swapRaw);
+  // Aynı leaf'e çöktüyse (yanlış yapı) tek klasör say
+  if (path.resolve(swapped) === path.resolve(orig)) return { orig, swapped: null };
+  return { orig, swapped };
+}
+
 export function resolveRouterPaths(
   provider: string,
   videoDir: string,
@@ -31,11 +120,7 @@ export function resolveRouterPaths(
     }
   }
 
-  let keyframesDir = path.join(root, "keyframes");
-  if (source === "swapped") {
-    const swapped = path.join(root, "keyframes_swapped");
-    keyframesDir = fs.existsSync(swapped) ? swapped : keyframesDir;
-  }
+  const keyframesDir = resolveActiveKeyframesDir(root, source);
 
   if (provider === "firefly") {
     return {

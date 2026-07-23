@@ -51,8 +51,9 @@ export function sceneMainTopic(scene: SceneRow): string {
  * - v2: slow motion ana aksiyon
  * - v3: scene_description verbatim (Hailuo optimizer kapalı)
  */
-export function productionVariantKeys(_scene: SceneRow): string[] {
-  return ["v1", "v2", "v3"];
+export function productionVariantKeys(scene: SceneRow): string[] {
+  const base = ["v1", "v2", "v3"];
+  return [...base, ...(isGeekFree(scene) ? ["v4"] : [])];
 }
 
 export function productionVariantCount(scene: SceneRow): number {
@@ -87,7 +88,7 @@ export function loadProjectScenes(projectName: string): SceneRow[] {
   return loadScenesJsonFile(file);
 }
 
-export function sceneVariantKeys(scene: SceneRow, allowedVariants = ["v1", "v2", "v3"]): string[] {
+export function sceneVariantKeys(scene: SceneRow, allowedVariants = ["v1", "v2", "v3", "v4"]): string[] {
   const allowed = new Set(allowedVariants.map((v) => v.trim().toLowerCase()).filter(Boolean));
   return productionVariantKeys(scene).filter((k) => allowed.has(k));
 }
@@ -124,7 +125,7 @@ export function buildScenePlan(scenes: SceneRow[]): {
     if (isGeekFree(s)) withGeek += 1;
   }
   const parts: string[] = [`${scenes.length} sahne × v1+v2+v3`];
-  if (withGeek) parts.push(`${withGeek}×geekfree→v1`);
+  if (withGeek) parts.push(`${withGeek}×geekfree→v4 (extra)`);
 
   return {
     scenes: rows,

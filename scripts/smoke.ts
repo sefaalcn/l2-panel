@@ -28,9 +28,9 @@ async function main() {
   check("hailuo start_only -> hailuo2.3", route("hailuo", "start_only") === "hailuo2.3");
   check("firefly both -> ray3.14", route("firefly", "both") === "ray3.14");
   check("firefly end_only -> ray3.14_end", route("firefly", "end_only") === "ray3.14_end");
-  check("firefly start kling", route("firefly", "start_only", 0, "kling") === "kling2.5");
+  check("firefly start kling", route("firefly", "start_only", 0, "kling") === "kling3.0");
   check("firefly start runway", route("firefly", "start_only", 0, "runway") === "runway4.5");
-  check("firefly alternate çift", route("firefly", "start_only", 2, "alternate") === "kling2.5");
+  check("firefly alternate çift", route("firefly", "start_only", 2, "alternate") === "kling3.0");
   check("firefly alternate tek", route("firefly", "start_only", 3, "alternate") === "runway4.5");
 
   console.log("[1b] video_model hybrid routing");
@@ -44,19 +44,29 @@ async function main() {
     routeScene({ video_model: "hailuo", frame_mode: "both" }, 0, "hailuo").provider === "hailuo",
   );
   check(
-    "kling hybrid -> firefly",
-    routeScene({ video_model: "kling_2_5_turbo", frame_mode: "start_only" }, 0, "hailuo").provider ===
-      "firefly",
+    "kling_3 -> kling3.0",
+    fireflyAdapterFromVideoModel("kling_3", "start_only") === "kling3.0",
   );
   check(
-    "kling adapter key",
-    routeScene({ video_model: "kling_2_5_turbo", frame_mode: "start_only" }, 0, "hailuo").adapterKey ===
-      "kling2.5",
+    "ray_3_14_pro both -> ray3.14",
+    fireflyAdapterFromVideoModel("ray_3_14_pro", "both") === "ray3.14",
+  );
+  check(
+    "ray_3_14_pro end_only -> ray3.14_end",
+    fireflyAdapterFromVideoModel("ray_3_14_pro", "end_only") === "ray3.14_end",
+  );
+  check(
+    "kling_3 hybrid -> firefly",
+    routeScene({ video_model: "kling_3", frame_mode: "start_only" }, 0, "hailuo").provider === "firefly",
+  );
+  check(
+    "kling_3 adapter key",
+    routeScene({ video_model: "kling_3", frame_mode: "start_only" }, 0, "hailuo").adapterKey === "kling3.0",
   );
 
   console.log("[2] adaptor registry");
   const keys = [...allAdapters().keys()].sort();
-  const expected = ["hailuo2.0", "hailuo2.3", "kling2.5", "ray3.14", "ray3.14_end", "runway4.5"];
+  const expected = ["hailuo2.0", "hailuo2.3", "kling2.5", "kling3.0", "ray3.14", "ray3.14_end", "runway4.5"];
   check(`kayıtlı adaptorler: ${keys.join(",")}`, JSON.stringify(keys) === JSON.stringify(expected));
 
   console.log("[3] yy imzası (sabit girdi, Python ile karşılaştırılacak)");
@@ -123,8 +133,8 @@ async function main() {
     dryRun: true,
     log: () => {},
   });
-  // v1: 3 sahne (scene_001'de alt≥2 yok → yalnız v1)
-  check(`hailuo dry-run planned=3 (gerçek: ${tallyH.planned})`, tallyH.planned === 3);
+  // v1 tüm sahneler (3) + v2 yalnız prompt'u olan scene_001 (1) = 4
+  check(`hailuo dry-run planned=4 (gerçek: ${tallyH.planned})`, tallyH.planned === 4);
 
   const pathsF = resolveRouterPaths("firefly", root);
   const tallyF = await runPipeline({

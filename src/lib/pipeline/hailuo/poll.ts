@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
-import { HAILUO_BASE, HAILUO_NEGATIVE_PROMPT } from "./constants";
+import { HAILUO_BASE } from "./constants";
 import type { HailuoContext } from "./context";
 import { getCookies, log } from "./context";
 import { pollFeedForDownload, pollVideoResultApi } from "./api";
@@ -231,16 +231,4 @@ export function normalizePrompt(prompt: string): string {
   return (prompt || "").replace(/^\[([^\]]+)\]/, (_, inner: string) => {
     return `[${inner.replace(/, /g, ",")}]`;
   });
-}
-
-/** Hailuo resmi sözdizimi: pozitif prompt + `-v <negatif>` */
-export function withHailuoNegative(
-  prompt: string,
-  negative = HAILUO_NEGATIVE_PROMPT,
-): string {
-  const base = (prompt || "").trim();
-  const neg = (negative || "").trim();
-  if (!base || !neg) return base;
-  if (/\s-v\s/i.test(base) || base.toLowerCase().includes("-v ")) return base;
-  return `${base} -v ${neg}`;
 }

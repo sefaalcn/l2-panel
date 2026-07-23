@@ -7,31 +7,43 @@ Return ONLY corrected JSON: {"v1":"...","v2":"...","v3":"...","face_visible":tru
 RULES TO ENFORCE:
 1. NO FROZEN CHARACTERS (highest priority): every character implied as visible (by the note or the prompts)
    must have a verb in v1 & v3. If one is frozen, add a small fitting reaction (glance/lean/step/giggle).
-   Join simultaneous chars with "while"/"as".
+   Join simultaneous chars with "while"/"as". Name them OBVIOUSLY (the spotted cow beside the toddler,
+   the pink pig laughing) — never "someone" / "the animal".
 2. MORPH SAFETY: remove literal squash/stretch/transform/melt, "head swells", "body flattens",
    "eyes pop out of sockets", skin/face turning a colour. Keep intensity via natural muscles only.
 3. NO ANIMATED LIGHTING: delete "soft/warm/outdoor lighting", "light shifts/glows/flickers", "sunlight", "shimmer", "lens flare".
-4. SINGLE CONTINUOUS ACTION: collapse any then→then→then chain into one flowing motion.
-5. V2 = SLOW main action (NOT frozen): same camera as v1; the character DOES perform the scene's main
-   action but slowly/gently in one motion (don't drop it); v2 MUST contain the literal temporal keyword
+4. CAUSAL FLOW (Anticipation → Action → Follow-through): rewrite comma/then stacks into ONE flowing
+   sentence with as/while/as soon as/ending. Keep motion budget to one causal triad, not 3+ disconnected beats.
+5. EMOTION TIMELINE: if the note has snatch/loss/hurt → cry, the face MUST shift with the beat
+   (fear/flinch during the take → cry as follow-through). Remove lingering grin/laugh/happy during
+   a sad or loss beat. Match the END emotion to the note's ending.
+5b. V2 = SLOW main action (NOT frozen): same camera as v1; the character DOES perform the scene's main
+   causal beat but slowly/gently in one motion (don't drop it); v2 MUST contain the literal temporal keyword
    "in slow motion" (add it if missing); expressive FACE; one blink; ONE symbol max
    (Zzz/POW/sound waves/heart/sweat/!/bubble) if it fits; NO style tag. For object/machine scenes V2 must be a
    diegetic object-idle (lights pulse / icons glow / sparkle) — NOT "not applicable" (that's only for a character from behind).
-5b. STRUCTURE ORDER: each prompt follows [Camera bracket] → subject anchor → short static environment
-   locator ("in the sunny garden") → one continuous action. If the subject is generic ("someone",
-   "a character"), replace it with the specific role noun + short visual descriptor. Remove
+5c. STRUCTURE ORDER: each prompt follows [Camera bracket] → obvious subject anchors → short static environment
+   locator ("beside the playground swing") → one causal action flow. If the subject is generic ("someone",
+   "a character", "the animal"), replace it with the specific role noun + short visual descriptor. Remove
    contradictory instructions (e.g. sunny + stormy) and vague poetic phrasing — plain direct language.
-6. V3 = v1 action + ONE acting gag (gesture, not a symbol). v1 = clean. Keep the camera BRACKET at the very start of v1/v2/v3 (e.g. "[Pan right, Push in]"); convert any prose camera ("STATIC SHOT —") into the bracket form.
+6. V3 = v1 action + ONE acting gag (gesture, not a symbol) OR faithful translation when override says so.
+   v1 = clean. Keep the camera BRACKET at the very start of v1/v2/v3 (e.g. "[Pan right, Push in]"); convert any prose camera ("STATIC SHOT —") into the bracket form.
 7. face_visible=false → no facial actions/gags; no "exaggerated faces"; drive motion from hands/objects/body.
 8. Screen overlays (impact stars, screen shake, alarm, iris, "POW" as screen graphic, dizzy spinning stars) must NOT be
    in the prompt text (they are post). In-frame single symbols in V2 are fine.
 9. Keep style tag only on v1/v3 (the pipeline manages it); never on v2.
 10. EXPRESSION RICHNESS: if an emotion is described with a flat/abstract word ("happy", "sad") or a
-   repeated stock phrase ("huge delighted grin"), rewrite it as a concrete, varied PHYSICAL description
-   (e.g. "cheeks lift as eyes crinkle", "lower lip trembles into a pout"). Don't reuse the same
-   expression across v1/v2/v3 of one scene — vary them.
+    repeated stock phrase ("huge delighted grin"), rewrite it as a concrete, varied PHYSICAL description
+    (e.g. "cheeks lift as eyes crinkle", "lower lip trembles into a pout"). Don't reuse the same
+    expression across v1/v2/v3 of one scene — vary them. Place the emotion on the correct story beat.
 11. APPEARANCE CONSISTENCY (face-swap leak guard): if a CHARACTERS block is provided, every appearance
-   detail in the prompts (hair, hair color, face, skin, clothing color) MUST match it. Delete or fix any
-   description of an OLD/different look (e.g. "bald" when CHARACTERS says curly orange hair). When in
-   doubt, drop the appearance adjective entirely and keep just the role noun ("the baby") — Hailuo sees
-   the start frame, so a missing adjective is safer than a wrong one.
+    detail in the prompts (hair, hair color, face, skin, clothing color) MUST match it. Delete or fix any
+    description of an OLD/different look (e.g. "bald" when CHARACTERS says curly orange hair). When in
+    doubt, drop the appearance adjective entirely and keep just the role noun ("the baby") — Hailuo sees
+    the start frame, so a missing adjective is safer than a wrong one.
+12. LANDING / END POSE: for frame_mode=both (and start_only), v1 and v2 MUST contain an explicit
+    "ending …" clause that matches the END frame pose when known. If missing, ADD it. Remove mid-action
+    climaxes that contradict the end pose. Collapse excess action beats so the motion can finish in-clip.
+13. FAIL LESSONS: if the user message includes "LESSONS FROM FAILED HAILUO OUTPUTS", treat those tags as
+    hard constraints — especially end_miss, morph, frozen, identity, physics_flat, camera_fight,
+    too_much_action, story_break (olay/bağlam kopukluğu: keep causal story order + emotion timeline).

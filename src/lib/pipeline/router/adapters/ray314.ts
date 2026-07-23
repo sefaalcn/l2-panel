@@ -5,6 +5,7 @@ import { type Job, register, retry } from "../core";
 const NEGATIVE_PROMPT = "cartoon, vector art, & bad aesthetics & poor aesthetic";
 const MODE = "flex_2";
 const ASPECT_RATIO = "16:9";
+const DEFAULT_DURATION = 5;
 const DEFAULT_RESOLUTION = "720p";
 const SIZES: Record<string, [number, number]> = {
   "720p": [1280, 720],
@@ -20,11 +21,11 @@ function buildPayload(job: Job, startId: string | null, endId: string | null) {
   const payload: Record<string, unknown> = {
     modelId: "luma",
     modelVersion: "3.14-ray",
-    size: { width, height },
+    size: { height, width },
     mode: MODE,
     prompt: job.prompt,
     negativePrompt: NEGATIVE_PROMPT,
-    duration: job.duration,
+    duration: job.duration || DEFAULT_DURATION,
     generationMetadata: { module: "text2video", submodule: "ff-video-generate" },
     modelSpecificPayload: { resolution: res, aspect_ratio: ASPECT_RATIO },
     output: { storeInputs: true },
@@ -52,7 +53,7 @@ register({
   modes: new Set(["both"]),
   ready: true,
   generate: generateRay314,
-  description: "Luma Ray3.14 (both: start+end) — firefly-3p",
+  description: "Luma Ray3.14 (both: start+end, 720p) — firefly-3p",
 });
 
 register({

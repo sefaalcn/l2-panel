@@ -2,7 +2,6 @@ import { uploadImage } from "../../firefly/client";
 import { stableSeed, submitF3p } from "../../firefly/f3p";
 import { type Job, register, retry } from "../core";
 
-const NEGATIVE_PROMPT = "cartoon, vector art, & bad aesthetics & poor aesthetic";
 const DURATION = 8;
 
 function buildPayload(job: Job, startId: string) {
@@ -13,7 +12,6 @@ function buildPayload(job: Job, startId: string) {
     seeds: [stableSeed(job)],
     referenceBlobs: [{ id: startId, usage: "general", promptReference: 1 }],
     prompt: job.prompt,
-    negativePrompt: NEGATIVE_PROMPT,
     duration: job.duration || DURATION,
     generationMetadata: { module: "text2video", submodule: "ff-video-generate" },
     output: { storeInputs: true },

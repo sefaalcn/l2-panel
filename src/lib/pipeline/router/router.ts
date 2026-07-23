@@ -13,9 +13,9 @@ export function route(
     if (mode === "end_only") return "ray3.14_end";
     if (mode === "start_only") {
       const sm = (startModel || "kling").toLowerCase();
-      if (sm === "kling") return "kling2.5";
+      if (sm === "kling") return "kling3.0";
       if (sm === "runway") return "runway4.5";
-      if (sm === "alternate") return ordinal % 2 === 0 ? "kling2.5" : "runway4.5";
+      if (sm === "alternate") return ordinal % 2 === 0 ? "kling3.0" : "runway4.5";
       throw new Error(`Bilinmeyen start_model: ${startModel}`);
     }
   } else if (p === "hailuo") {

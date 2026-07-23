@@ -7,6 +7,8 @@ anthropic_api_key.txt
 firefly_token.txt
 firefly_arp.txt
 firefly_nonce.txt
+firefly_user_agent.txt
+firefly_api_key.txt
 kling_arp.txt
 kling_nonce.txt
 runway_arp.txt
@@ -34,9 +36,19 @@ tsconfig.tsbuildinfo
 .env
 .env.*
 
+# curl-impersonate binaries (~10MB+, platform-specific)
+tools/curl-impersonate/bin/
+tools/curl-impersonate/lib/
+tools/curl-impersonate/include/
+tools/curl-impersonate/share/
+tools/curl-impersonate/*.tar.gz
+tools/curl-impersonate/cacert.pem
+
 # runtime
 .l2_scratch/
 l2_panel/.l2_*.txt
 l2_panel/.l2_active_run.json
+l2_panel/runs/
+l2_panel/locks/
 projects/*
 !projects/.gitkeep

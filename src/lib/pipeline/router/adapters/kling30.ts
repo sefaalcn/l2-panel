@@ -2,12 +2,19 @@ import { uploadImage } from "../../firefly/client";
 import { stableSeed, submitF3p } from "../../firefly/f3p";
 import { type Job, register, retry } from "../core";
 
-const NEGATIVE_PROMPT = "blur, distort, low quality, morphing, deformed limbs";
 const DEFAULT_DURATION = 5;
-/** Adobe Firefly 3p — Kling 3.0 I2V (2.5: kling_v2_5_turbo_pro_i2v deseni) */
+const DEFAULT_RESOLUTION = "720p";
+const ASPECT_RATIO = "16:9";
+const SIZES: Record<string, [number, number]> = {
+  "720p": [1280, 720],
+  "1080p": [1920, 1080],
+};
+/** Adobe Firefly 3p — Kling 3.0 I2V (720p sınırsız tier) */
 const MODEL_VERSION = "kling_v3_pro_i2v";
 
 function buildPayload(job: Job, startId: string | null, endId: string | null) {
+  const res = job.resolution && SIZES[job.resolution] ? job.resolution : DEFAULT_RESOLUTION;
+  const [width, height] = SIZES[res];
   const referenceBlobs: Record<string, unknown>[] = [];
   if (startId) referenceBlobs.push({ id: startId, usage: "frame", order: 1 });
   if (endId) referenceBlobs.push({ id: endId, usage: "frame", order: 2 });
@@ -15,14 +22,14 @@ function buildPayload(job: Job, startId: string | null, endId: string | null) {
   return {
     modelId: "kling",
     modelVersion: MODEL_VERSION,
-    size: { width: 1920, height: 1080 },
+    size: { height, width },
     seeds: [stableSeed(job)],
     referenceBlobs,
     prompt: job.prompt,
     duration: job.duration || DEFAULT_DURATION,
     generateAudio: false,
     generationMetadata: { module: "image2video", submodule: "ff-video-generate" },
-    modelSpecificPayload: { aspect_ratio: "16:9", negative_prompt: NEGATIVE_PROMPT },
+    modelSpecificPayload: { aspect_ratio: ASPECT_RATIO },
     output: { storeInputs: true },
   };
 }
@@ -59,6 +66,6 @@ register({
   modelTag: "kling3",
   modes: new Set(["start_only", "both", "end_only"]),
   ready: true,
-  description: "Kling 3.0 pro i2v (start_only + both start/end) — firefly-3p",
+  description: "Kling 3.0 pro i2v (720p, start_only + both + end_only) — firefly-3p",
   generate: generateKling30,
 });

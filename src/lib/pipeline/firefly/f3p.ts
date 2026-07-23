@@ -2,11 +2,12 @@ import crypto from "crypto";
 import { jobLabel, retry, type Job } from "../router/core";
 import {
   GENERATE_3P_ASYNC,
-  baseHeaders,
+  buildFireflyHeaders,
   downloadVideo,
   pollResult,
   readOptional,
 } from "./client";
+import { fireflyFetch, isCurlImpersonateActive } from "./http";
 
 const TRANSIENT = new Set([408, 425, 429, 500, 502, 503, 504]);
 
@@ -16,17 +17,17 @@ export function stableSeed(job: Job): number {
   return Number(BigInt(`0x${h}`) % BigInt(1_000_000));
 }
 
-export function f3pHeaders(arpFile: string | null, nonceFile: string | null): Record<string, string> {
-  const h: Record<string, string> = { ...baseHeaders(), "content-type": "application/json" };
-  if (arpFile) {
-    const v = readOptional(arpFile);
-    if (v) h["x-arp-session-id"] = v;
-  }
-  if (nonceFile) {
-    const v = readOptional(nonceFile);
-    if (v) h["x-nonce"] = v;
-  }
-  return h;
+/** Model-özel arp (kling_arp.txt vb.); nonce her denemede taze 64-hex */
+export function f3pHeaders(arpFile: string | null): Record<string, string> {
+  // ARP önceliği: model-özel (kling/runway) → genel firefly_arp
+  let arpValue: string | null = null;
+  if (arpFile) arpValue = readOptional(arpFile);
+  if (!arpValue) arpValue = readOptional("firefly_arp.txt");
+  // buildFireflyHeaders içinde Firefox insertion order korunacak şekilde inject
+  return buildFireflyHeaders({
+    contentType: "application/json",
+    arpValue,
+  });
 }
 
 function extractResultUrl(resp: Response, body: Record<string, unknown>): string {
@@ -55,12 +56,22 @@ async function pollAndDownload(job: Job, href: string, tag: string, log: (s: str
   return out;
 }
 
+function peekErrorMessage(raw: string): string {
+  try {
+    const j = JSON.parse(raw) as { message?: string; error_code?: string };
+    const parts = [j.error_code, j.message].filter(Boolean);
+    return parts.join(": ") || raw.slice(0, 200);
+  } catch {
+    return raw.slice(0, 200);
+  }
+}
+
 /** _firefly3p.submit portu — POST-retry -> result URL -> poll -> indir */
 export async function submitF3p(
   job: Job,
   payload: Record<string, unknown>,
   arpFile: string | null,
-  nonceFile: string | null,
+  _nonceFile: string | null,
   tag: string,
   log: (s: string) => void = console.log,
 ): Promise<string> {
@@ -76,25 +87,46 @@ export async function submitF3p(
     }
   }
 
-  const hd = f3pHeaders(arpFile, nonceFile);
-
   log(`>> [1] generate (${tag} / firefly-3p async)...`);
+  if (isCurlImpersonateActive()) {
+    log(`   HTTP: curl-impersonate (Firefox135 TLS/H2 fingerprint)`);
+  } else {
+    log(`   HTTP: native fetch — 408 riski yüksek; FIREFLY_CURL_IMPERSONATE kur`);
+  }
   let resp: Response | null = null;
-  for (let attempt = 1; attempt <= 5; attempt++) {
+  let lastRaw = "";
+  const maxAttempts = 6;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const attemptHeaders = f3pHeaders(arpFile);
     resp = await retry(
       () =>
-        fetch(GENERATE_3P_ASYNC, {
+        fireflyFetch(GENERATE_3P_ASYNC, {
           method: "POST",
-          headers: hd,
+          headers: attemptHeaders,
           body: JSON.stringify(payload),
         }),
       { label: "generate-post", log },
     );
-    log(`   deneme ${attempt}: HTTP ${resp.status}`);
-    if (resp.status === 401) throw new Error("401 = token süresi dolmuş.");
+    log(`   deneme ${attempt}/${maxAttempts}: HTTP ${resp.status}`);
+    if (resp.status === 401) {
+      throw new Error("Firefly Bearer token süresi dolmuş (video üretimi) — panelden Firefly Token yenile");
+    }
+    if (resp.status === 403) {
+      throw new Error("Firefly yetki hatası (403) — panelden Firefly Token + arp yenile (F12)");
+    }
     if (TRANSIENT.has(resp.status)) {
-      const wait = 8 * attempt;
-      log(`   >> geçici sunucu hatası. ${wait}s bekleyip tekrar...`);
+      lastRaw = await resp.text().catch(() => "");
+      const peek = peekErrorMessage(lastRaw);
+      if (peek) log(`   Adobe: ${peek}`);
+      if (attempt >= maxAttempts) {
+        // body zaten okundu — sahte Response yerine status'u korumak için yeniden sarmala
+        resp = new Response(lastRaw, { status: resp.status, headers: resp.headers });
+        break;
+      }
+      // system under load → uzun bekle, kısa aralıkla spam etme
+      const underLoad = /under load|timeout_error/i.test(peek);
+      const wait = underLoad ? 45 + 30 * attempt : resp.status === 408 ? 15 * attempt : 8 * attempt;
+      log(`   >> geçici sunucu hatası (${resp.status}). ${wait}s bekleyip tekrar...`);
       await new Promise((r) => setTimeout(r, wait * 1000));
       continue;
     }
@@ -103,7 +135,7 @@ export async function submitF3p(
   if (!resp) throw new Error(`${tag} generate-async: yanıt yok`);
 
   let body: Record<string, unknown> = {};
-  const rawText = await resp.text();
+  const rawText = lastRaw && resp.status >= 400 ? lastRaw : await resp.text();
   try {
     body = JSON.parse(rawText) as Record<string, unknown>;
   } catch {
@@ -113,8 +145,13 @@ export async function submitF3p(
   if (resp.status >= 400) {
     log(`   --- SUNUCU HATA (ham) ---`);
     log(rawText.slice(0, 2000));
-    // Firefly moderasyon = HTTP 451; S4 classify bu metni arar
-    throw new Error(`${tag} generate-async HTTP ${resp.status}`);
+    const peek = peekErrorMessage(rawText);
+    if (resp.status === 408 || /under load|timeout_error/i.test(peek)) {
+      throw new Error(
+        `${tag} Adobe yoğun/timeout (${peek || "408"}) — Firefly sitesinde üretimi dene; rahatlayınca Hatalıları tekrar dene`,
+      );
+    }
+    throw new Error(`${tag} generate-async HTTP ${resp.status}${peek ? ` — ${peek}` : ""}`);
   }
 
   const href = extractResultUrl(resp, body);

@@ -47,6 +47,16 @@ export function loadCredentialFiles(projectName?: string | null): Record<string,
     if (v) out[key] = v;
   }
 
+  // .env.local — dosya yoksa env'den (elle panel girmeye gerek kalmasın)
+  if (!out.token && process.env.HAILUO_TOKEN?.trim()) out.token = process.env.HAILUO_TOKEN.trim();
+  if (!out.cookie && process.env.HAILUO_COOKIE?.trim()) out.cookie = process.env.HAILUO_COOKIE.trim();
+  if (!out.project && process.env.HAILUO_PROJECT_ID?.trim()) {
+    out.project = process.env.HAILUO_PROJECT_ID.trim();
+  }
+  if (!out.ff_token && process.env.FIREFLY_TOKEN?.trim()) out.ff_token = process.env.FIREFLY_TOKEN.trim();
+  if (!out.ff_arp && process.env.FIREFLY_ARP?.trim()) out.ff_arp = process.env.FIREFLY_ARP.trim();
+  if (!out.ff_nonce && process.env.FIREFLY_NONCE?.trim()) out.ff_nonce = process.env.FIREFLY_NONCE.trim();
+
   return out;
 }
 

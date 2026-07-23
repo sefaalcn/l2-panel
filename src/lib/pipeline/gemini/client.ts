@@ -6,7 +6,16 @@ import { getSelfCheckInstruction, getSystemPrompt, GEMINI_MODEL } from "./prompt
 import type { ProjectPaths, SceneRow } from "./project";
 import { log } from "./project";
 import { isGeekFree, sceneMainTopic } from "@/lib/scenes";
+import {
+  formatFailLessonsForGemini,
+  loadFailLessonsFromBase,
+} from "@/lib/fail-lessons";
+import {
+  formatLearnedRulesForGemini,
+  loadLearnedRulesFromBase,
+} from "@/lib/learned-rules";
 import { clip, fmtTime, MAX_V1, MAX_V2, MAX_V3, normalizeChar, parseJsonArray } from "./text";
+import { isFreeTierQuotaError } from "./ai-client";
 
 type Part =
   | { text: string }
@@ -48,10 +57,29 @@ export async function uploadOrCache(
   const up = await compressVideo(paths.videoPath);
   const stat = fs.statSync(up);
   log(`📤 Yükleniyor: ${up} (${(stat.size / 1e6).toFixed(1)} MB)...`);
-  let f = await client.files.upload({
-    file: up,
-    config: { mimeType: "video/mp4" },
-  });
+  let f: UploadedFile | null = null;
+  const backoffs = [5, 15, 30, 60];
+  for (let attempt = 1; attempt <= backoffs.length + 1; attempt++) {
+    try {
+      f = await client.files.upload({
+        file: up,
+        config: { mimeType: "video/mp4" },
+      });
+      break;
+    } catch (e) {
+      const err = e as { message?: string; cause?: { code?: string; message?: string } };
+      const msg = err?.message || String(e);
+      const cause = err?.cause;
+      const causeStr = cause ? ` (cause: ${cause.code || ""} ${cause.message || ""})`.trim() : "";
+      if (attempt > backoffs.length) {
+        throw new Error(`Gemini upload başarısız: ${msg}${causeStr}`);
+      }
+      const wait = backoffs[attempt - 1];
+      log(`   ⚠️ upload denemesi ${attempt} başarısız: ${msg}${causeStr} — ${wait}s bekleyip tekrar...`);
+      await sleep(wait * 1000);
+    }
+  }
+  if (!f) throw new Error("Gemini upload: yanıt yok");
   while (true) {
     const chk = await client.files.get({ name: f.name! });
     if (chk.state === "ACTIVE") {
@@ -125,13 +153,24 @@ async function buildParts(
   }
   if (withImages) {
     intro +=
-      "\nFor EACH scene the actual START frame image is attached right after its note — STUDY it.";
+      "\nFor EACH scene the START frame image is attached — STUDY it." +
+      " If frame_mode=both, an END frame is also attached: the action MUST land in that exact end pose;" +
+      " end v1/v2 with an explicit 'ending …' clause matching the END image.";
     if (swapOn) {
       intro +=
         "\nSome scenes also include the ORIGINAL (pre-swap) frame for identity mapping only.";
     }
   } else {
     intro += "\nJudge face_visible from the video itself.";
+  }
+
+  const learnedBlock = formatLearnedRulesForGemini(loadLearnedRulesFromBase(paths.base));
+  if (learnedBlock) {
+    intro += "\n\n" + learnedBlock;
+  }
+  const failBlock = formatFailLessonsForGemini(loadFailLessonsFromBase(paths.base));
+  if (failBlock) {
+    intro += "\n\n" + failBlock;
   }
   parts.push({ text: intro });
 
@@ -197,6 +236,22 @@ async function buildParts(
           parts.push({
             inlineData: { data: b64o.toString("base64"), mimeType: "image/jpeg" },
           });
+        }
+      }
+      // both: END frame — landing pose Gemini must write into "ending …"
+      if (fm === "both") {
+        const { swap: endSwap } = findFramePair(paths, label, "last", swapOn);
+        if (endSwap && endSwap !== fpSwap) {
+          const b64e = await encodeImage(endSwap);
+          if (b64e) {
+            parts.push({
+              text:
+                "  END frame (LANDING TARGET) — v1/v2 MUST finish in this exact pose; write 'ending …' to match:",
+            });
+            parts.push({
+              inlineData: { data: b64e.toString("base64"), mimeType: "image/jpeg" },
+            });
+          }
         }
       }
     }
@@ -270,6 +325,7 @@ export async function genBatch(
       } catch (e) {
         lastErr = e;
         log(`   ⚠️ ${mode} deneme ${attempt + 1}/2 hata: ${e}`);
+        if (isFreeTierQuotaError(e)) throw e;
         await sleep(5000);
       }
     }
@@ -421,10 +477,14 @@ export async function selfCheck(
   entry: Record<string, unknown>,
   faceVis: boolean,
   videoChars: string,
+  failLessons = "",
 ): Promise<{ entry: Record<string, unknown>; changed: string[] }> {
   let ctx = "";
   if (videoChars) {
     ctx += `CHARACTERS (TRUE current appearance):\n${videoChars.slice(0, 800)}\n\n`;
+  }
+  if (failLessons.trim()) {
+    ctx += failLessons.trim().slice(0, 2000) + "\n\n";
   }
   const note = String(entry.scene_desc || "").trim();
   if (note) ctx += `Scene user note: "${note.slice(0, 300)}"\n\n`;

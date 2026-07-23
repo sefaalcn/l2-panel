@@ -8,7 +8,18 @@ import { loadProjectScenes, projectNeedsGemini } from "@/lib/scenes";
 import { loadCredentialFiles } from "@/lib/credentials";
 import { projectHasFireflyScenes, projectHasHailuoScenes } from "@/lib/video-model";
 import { KEYFRAMES_SOURCE_FILE, parseKeyframesSource } from "@/lib/ingest";
-import { activeRun, cleanCredFiles, writeRunstate } from "@/lib/runstate";
+import { resolveActiveKeyframesDir } from "@/lib/pipeline/router/resolve";
+import {
+  cleanCredFiles,
+  getActiveRun,
+  listActiveRuns,
+  safeRunId,
+  writeRunstate,
+} from "@/lib/runstate";
+import {
+  extractFireflyCredsFromPaste,
+  persistFireflyCreds,
+} from "@/lib/pipeline/firefly/adobe-ingest";
 
 export const dynamic = "force-dynamic";
 
@@ -17,15 +28,28 @@ function stageCredential(
   val: string,
   env: NodeJS.ProcessEnv,
   proj: string,
+  projectName: string,
 ) {
   const tgt = cred.target as { type?: string; env?: string };
   if (tgt?.type === "file" && tgt.env) {
-    const fpath = path.join(PANEL_DIR, `.l2_${cred.key}.txt`);
+    let toWrite = val;
+    // Firefly alanına cURL yapıştırıldıysa her şeyi ayıkla
+    if (cred.key === "ff_token") {
+      const extracted = extractFireflyCredsFromPaste(val);
+      if (extracted.token) {
+        persistFireflyCreds(extracted, CODE_ROOT);
+        toWrite = extracted.token;
+      } else if (/curl|authorization\s*:/i.test(val)) {
+        throw new Error("Firefly cURL içinde Bearer token bulunamadı");
+      }
+    }
+    const tag = safeRunId(projectName);
+    const fpath = path.join(PANEL_DIR, `.l2_${tag}_${cred.key}.txt`);
     fs.mkdirSync(PANEL_DIR, { recursive: true });
-    fs.writeFileSync(fpath, val, "utf8");
+    fs.writeFileSync(fpath, toWrite, "utf8");
     env[tgt.env] = fpath;
     if (cred.key === "ff_token") {
-      fs.writeFileSync(path.join(CODE_ROOT, "firefly_token.txt"), val, "utf8");
+      fs.writeFileSync(path.join(CODE_ROOT, "firefly_token.txt"), toWrite, "utf8");
     }
     if (cred.key === "project") {
       fs.writeFileSync(path.join(CODE_ROOT, "hailuo_project.txt"), val, "utf8");
@@ -37,22 +61,27 @@ function stageCredential(
 export async function POST(req: Request) {
   const body = await req.json();
   const project = String(body.project || "").trim();
-  // Orchestrator hep hailuo — sahne yönü JSON video_model ile (hybrid)
   const provider = "hailuo";
   const variants = String(body.variants || "v1");
   const concurrency = body.concurrency != null ? Number(body.concurrency) : null;
   const scenesFilter = body.scenes ? String(body.scenes) : null;
   const promptOptimizer = body.prompt_optimizer !== false;
   const keyframesSource = parseKeyframesSource(body.keyframes_source);
+  const regeneratePrompts = body.regenerate_prompts === true;
 
-  const active = activeRun();
-  if (active) {
+  if (!project) {
+    return NextResponse.json({ detail: "project gerekli" }, { status: 400 });
+  }
+
+  // Yalnız AYNI proje zaten koşuyorsa engelle — diğer sekmeler paralel açılabilir
+  const mine = getActiveRun(project);
+  if (mine) {
     return NextResponse.json(
-      { detail: `zaten koşuyor: ${active.project} (status=${active.status}, pid=${active.pid})` },
+      { detail: `Bu proje zaten koşuyor (pid ${mine.pid}, status=${mine.status})` },
       { status: 409 },
     );
   }
-  cleanCredFiles();
+  cleanCredFiles(project);
 
   const proj = path.join(PROJECTS_ROOT, project);
   if (!fs.existsSync(proj)) {
@@ -60,17 +89,58 @@ export async function POST(req: Request) {
   }
   fs.writeFileSync(path.join(proj, KEYFRAMES_SOURCE_FILE), keyframesSource, "utf8");
 
+  try {
+    resolveActiveKeyframesDir(proj, keyframesSource);
+  } catch (e) {
+    cleanCredFiles(project);
+    return NextResponse.json(
+      { detail: e instanceof Error ? e.message : String(e) },
+      { status: 400 },
+    );
+  }
+
   const bodyCreds = (body.credentials || {}) as Record<string, string>;
   const fileCreds = loadCredentialFiles(project);
-  const credentials = { ...fileCreds, ...bodyCreds };
+  const credentials: Record<string, string> = { ...fileCreds };
+  for (const [k, v] of Object.entries(bodyCreds)) {
+    const trimmed = String(v || "").trim();
+    if (trimmed) credentials[k] = trimmed;
+  }
 
   const env = { ...process.env, ...sessionKeys } as NodeJS.ProcessEnv;
+  env.L2_PROJECTS_ROOT = PROJECTS_ROOT;
   mergeApiKeysIntoEnv(env, body.api_keys as Record<string, string> | undefined);
-  stageApiKeysForWorker(env);
+  stageApiKeysForWorker(env, project);
 
   const projectScenes = loadProjectScenes(project);
-  if (projectNeedsGemini(projectScenes) && !resolveApiKey("GEMINI_API_KEY", env)) {
-    cleanCredFiles();
+  const promptsJson = path.join(proj, `${project}_output`, "hailuo_prompts_claude.json");
+  let promptsComplete = false;
+  if (!regeneratePrompts && fs.existsSync(promptsJson)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(promptsJson, "utf8"));
+      const arr = Array.isArray(data) ? data : Array.isArray(data?.scenes) ? data.scenes : [];
+      const byIdx = new Map<number, { v1?: unknown; v4?: unknown }>();
+      for (const p of arr) {
+        const idx = Number((p as { index?: number }).index);
+        if (Number.isFinite(idx)) byIdx.set(idx, p as { v1?: unknown; v4?: unknown });
+      }
+      promptsComplete =
+        projectScenes.length > 0 &&
+        projectScenes.every((s) => {
+          const idx = Number(s.index ?? 0);
+          const p = byIdx.get(idx);
+          return Boolean(String(p?.v1 || "").trim());
+        });
+    } catch {
+      promptsComplete = false;
+    }
+  }
+  if (
+    (regeneratePrompts || !promptsComplete) &&
+    projectNeedsGemini(projectScenes) &&
+    !resolveApiKey("GEMINI_API_KEY", env)
+  ) {
+    cleanCredFiles(project);
     return NextResponse.json(
       {
         detail: "GEMINI_API_KEY gerekli — v1/v2 prompt üretimi (veya scene_description eksik)",
@@ -82,8 +152,17 @@ export async function POST(req: Request) {
   const needHailuo = projectHasHailuoScenes(projectScenes);
   const needFirefly = projectHasFireflyScenes(projectScenes);
   if (!needHailuo && !needFirefly) {
-    cleanCredFiles();
+    cleanCredFiles(project);
     return NextResponse.json({ detail: "Projede sahne yok" }, { status: 400 });
+  }
+
+  const others = listActiveRuns().filter((r) => r.project && r.project !== project);
+  const queueHints: string[] = [];
+  if (needHailuo && others.length) {
+    queueHints.push("Hailuo aynı anda başka projede varsa sıraya girer");
+  }
+  if (needFirefly && others.length) {
+    queueHints.push("Firefly aynı anda başka projede varsa sıraya girer");
   }
 
   const credGroups = [
@@ -98,7 +177,7 @@ export async function POST(req: Request) {
     }
     if (!val) {
       if (cred.required) {
-        cleanCredFiles();
+        cleanCredFiles(project);
         const hint =
           "autoFromFile" in cred && cred.autoFromFile
             ? `${cred.label} gerekli — ${(cred.target as { name?: string }).name || "dosya"} (proje kökü veya proje klasörü)`
@@ -109,7 +188,15 @@ export async function POST(req: Request) {
       }
       continue;
     }
-    stageCredential(cred, val, env, proj);
+    try {
+      stageCredential(cred, val, env, proj, project);
+    } catch (e) {
+      cleanCredFiles(project);
+      return NextResponse.json(
+        { detail: e instanceof Error ? e.message : String(e) },
+        { status: 400 },
+      );
+    }
   }
 
   const logf = path.join(proj, ".l2_run.log");
@@ -128,11 +215,12 @@ export async function POST(req: Request) {
   if (concurrency) args.push("--concurrency", String(concurrency));
   if (scenesFilter) args.push("--scenes", scenesFilter);
   if (!promptOptimizer) args.push("--no-optimizer");
+  if (regeneratePrompts) args.push("--regenerate-prompts");
   args.push("--keyframes-source", keyframesSource);
 
   const tsxCli = path.join(CODE_ROOT, "node_modules", "tsx", "dist", "cli.mjs");
   if (!fs.existsSync(tsxCli)) {
-    cleanCredFiles();
+    cleanCredFiles(project);
     return NextResponse.json({ detail: "tsx bulunamadı — npm install çalıştır" }, { status: 500 });
   }
 
@@ -164,9 +252,12 @@ export async function POST(req: Request) {
       engine: "node",
       worker: "tsx",
       routing: needFirefly ? "hybrid (JSON video_model)" : "hailuo",
+      parallel_ok: true,
+      other_runs: others.map((r) => ({ project: r.project, pid: r.pid, status: r.status })),
+      queue_note: queueHints.length ? queueHints.join(" · ") : null,
     });
   } catch (e) {
-    cleanCredFiles();
+    cleanCredFiles(project);
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ detail: `Worker başlatılamadı: ${msg}` }, { status: 500 });
   }

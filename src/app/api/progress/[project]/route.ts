@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
+import { formatAuthError } from "@/lib/auth-errors";
+import { notifyPipeline } from "@/lib/telegram";
+import { expiryWarningMessage } from "@/lib/token-expiry";
+import { watchProjectCredentialExpiries } from "@/lib/token-expiry-watch";
 import { PROJECTS_ROOT } from "@/lib/config";
 import { readKeyframesSource } from "@/lib/ingest";
 import { resolveRouterPaths } from "@/lib/pipeline/router/resolve";
@@ -9,6 +13,32 @@ import { pidAlive, readRunstate, clearRunstate } from "@/lib/runstate";
 export const dynamic = "force-dynamic";
 
 const WARN_TAGS = ["[UYARI", "[S4", "[ALAN", "[DOGRULAMA", "BASARISIZ", "2400001", "2400002"];
+
+function safePercent(current: number, total: number): number {
+  if (!Number.isFinite(total) || total <= 0) return 0;
+  const raw = Math.floor((current / total) * 100);
+  return Math.max(0, Math.min(100, raw));
+}
+
+function countScenesJson(projectDir: string): number {
+  try {
+    const file = fs
+      .readdirSync(projectDir)
+      .filter(
+        (n) =>
+          n.toLowerCase().endsWith(".json") &&
+          (n.includes("_scenes_manual") || n.toLowerCase().includes("scenes")) &&
+          !n.toLowerCase().includes("progress"),
+      )
+      .sort((a, b) => (a.includes("_scenes_manual") ? -1 : b.includes("_scenes_manual") ? 1 : 0))[0];
+    if (!file) return 0;
+    const raw = JSON.parse(fs.readFileSync(path.join(projectDir, file), "utf8"));
+    const arr = Array.isArray(raw) ? raw : Array.isArray(raw?.scenes) ? raw.scenes : [];
+    return arr.length;
+  } catch {
+    return 0;
+  }
+}
 
 export async function GET(
   _req: Request,
@@ -26,7 +56,7 @@ export async function GET(
   const softened: { scene: string; attempt?: number }[] = [];
   const errors: { id: string; scene: string; error: string }[] = [];
 
-  const rs = readRunstate();
+  const rs = readRunstate(project);
   const provider =
     rs?.project === project && rs.provider ? rs.provider : "hailuo";
   const kfSource = readKeyframesSource(proj);
@@ -52,9 +82,13 @@ export async function GET(
             id: k,
             label: variant ? `${scene} · ${variant}` : scene,
           });
-        } else if (st === "error" || st === "failed") {
+        } else if (st === "error" || st === "failed" || st === "no_input_frame") {
           counts.error += 1;
-          errors.push({ id: k, scene, error: String(v.error || "").slice(0, 120) });
+          errors.push({
+            id: k,
+            scene,
+            error: formatAuthError(String(v.error || v.status || "")).slice(0, 200),
+          });
         } else counts.other += 1;
         if (v.softened) softened.push({ scene, attempt: v.soften_attempt as number | undefined });
       }
@@ -84,7 +118,8 @@ export async function GET(
       runError =
         runError ||
         "Worker durdu (beklenmedik) — .l2_run.log dosyasına bakın veya panelden Durdur ile temizleyin";
-      clearRunstate();
+      notifyPipeline("worker_died", { project, message: runError });
+      clearRunstate(project);
     }
   }
 
@@ -96,7 +131,45 @@ export async function GET(
 
   if (runError === "prompt rc=1") {
     runError = "Prompt üretimi başarısız — GEMINI_API_KEY gerekli (Senaryo B) veya Gemini/ffmpeg hatası";
+  } else if (runError) {
+    runError = formatAuthError(runError);
   }
+
+  let expiringSoon: { id: string; label: string; remainingSec: number; message: string }[] = [];
+  if (alive && phase && !["bitti", "hata", "durduruldu", null].includes(phase)) {
+    expiringSoon = watchProjectCredentialExpiries(project, true).map((item) => ({
+      ...item,
+      message: expiryWarningMessage(item),
+    }));
+  }
+
+  const videoTotal = counts.done + counts.submitted + counts.error + counts.other;
+  const videoCurrent = counts.done + counts.submitted + counts.error;
+  let promptTotal = 0;
+  let promptCurrent = 0;
+  if (fs.existsSync(paths.promptsJson)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(paths.promptsJson, "utf8"));
+      const arr = Array.isArray(data) ? data : Array.isArray(data?.scenes) ? data.scenes : [];
+      promptCurrent = arr.length;
+    } catch {
+      /* */
+    }
+  }
+  promptTotal = countScenesJson(proj);
+
+  const progress_meta = {
+    prompt: {
+      current: promptCurrent,
+      total: promptTotal,
+      percent: safePercent(promptCurrent, promptTotal),
+    },
+    video: {
+      current: videoCurrent,
+      total: videoTotal,
+      percent: safePercent(videoCurrent, videoTotal),
+    },
+  };
 
   return NextResponse.json({
     project,
@@ -110,6 +183,8 @@ export async function GET(
     softened,
     errors,
     warnings: warnings.slice(-15),
+    expiring_soon: expiringSoon,
+    progress_meta,
     runtime: "local",
   });
 }

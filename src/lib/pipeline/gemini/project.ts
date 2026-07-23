@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import type { KeyframesSource } from "@/lib/ingest";
+import { resolveKeyframeRoots } from "../router/resolve";
 
 export type SceneRow = Record<string, unknown> & {
   index: number;
@@ -53,13 +54,15 @@ export function setupProject(projectPath: string, keyframesSource: KeyframesSour
   const scenesJson = path.join(base, manual || scenesCandidates[0] || "");
   if (!fs.existsSync(scenesJson)) throw new Error(`${base} içinde *scenes*.json yok`);
 
-  let kfSwapped = path.join(base, "keyframes_swapped");
-  let kfOrig = path.join(base, "keyframes");
-  if (keyframesSource === "swapped") {
-    if (!fs.existsSync(kfSwapped)) kfSwapped = kfOrig;
-    kfOrig = kfSwapped;
-  } else {
-    kfSwapped = kfOrig;
+  // İki klasörü ayrı tut — seçime göre birleştirme YOK (identity mapping bozulmasın)
+  const roots = resolveKeyframeRoots(base);
+  const kfOrig = roots.orig;
+  const kfSwapped = roots.swapped || kfOrig;
+
+  if (keyframesSource === "swapped" && !roots.swapped) {
+    throw new Error(
+      "keyframes_swapped/ yok — Swapped seçildi. ZIP'i «Swapped» olarak yükle veya «Orijinal» seç.",
+    );
   }
 
   const outputDir = path.join(base, `${name}_output`);
@@ -107,12 +110,25 @@ export function buildVideoContext(paths: ProjectPaths): string {
 export function parseScenesFilter(arg: string | null | undefined): { lo: number; hi: number } {
   if (!arg?.trim()) return { lo: 1, hi: 999999 };
   const a = arg.trim();
-  if (a.includes("-")) {
-    const [s, e] = a.split("-");
-    return { lo: parseInt(s, 10), hi: parseInt(e, 10) };
+  // "1,3,6" veya "1-4,7" — retry akışı virgüllü liste gönderir; min–max aralığına genişlet
+  // (aradaki prompt'u hazır sahneler zaten atlanır)
+  const nums: number[] = [];
+  for (const part of a.split(",")) {
+    const p = part.trim();
+    if (!p) continue;
+    if (p.includes("-")) {
+      const [s, e] = p.split("-");
+      const lo = parseInt(s, 10);
+      const hi = parseInt(e, 10);
+      if (Number.isFinite(lo)) nums.push(lo);
+      if (Number.isFinite(hi)) nums.push(hi);
+    } else {
+      const n = parseInt(p, 10);
+      if (Number.isFinite(n)) nums.push(n);
+    }
   }
-  const n = parseInt(a, 10);
-  return { lo: n, hi: n };
+  if (!nums.length) return { lo: 1, hi: 999999 };
+  return { lo: Math.min(...nums), hi: Math.max(...nums) };
 }
 
 export function log(msg: string) {

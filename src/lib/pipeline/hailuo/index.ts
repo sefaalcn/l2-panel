@@ -9,13 +9,12 @@ export {
   MAX_QUEUE,
   type UploadTuple,
 } from "./api";
-export { pollDownload, downloadStream, normalizePrompt, withHailuoNegative } from "./poll";
+export { pollDownload, downloadStream, normalizePrompt } from "./poll";
 export { hlParams, computeYy, buildQuery, hlHeaders } from "./sign";
 export {
   HAILUO_BASE,
   HAILUO_MODEL_20,
   HAILUO_MODEL_23,
-  HAILUO_NEGATIVE_PROMPT,
 } from "./constants";
 
 import { HAILUO_MODEL_20 } from "./constants";
@@ -26,7 +25,7 @@ import {
   type UploadTuple,
 } from "./api";
 import { setupContext, getHailuoToken, log } from "./context";
-import { normalizePrompt, pollDownload, withHailuoNegative } from "./poll";
+import { normalizePrompt, pollDownload } from "./poll";
 import { uploadImage } from "./upload";
 
 export type SubmitJob = {
@@ -87,12 +86,11 @@ export async function submitHailuoJob(job: SubmitJob): Promise<string> {
     }
   }
 
-  const prompt = withHailuoNegative(normalizePrompt(job.prompt));
+  const prompt = normalizePrompt(job.prompt);
   const optimizerOn = job.promptOptimizer !== false;
   log(
     `   Optimizer: ${optimizerOn ? "AÇIK (Hailuo optimize eder, useOriginPrompt=false)" : "KAPALI (verbatim, useOriginPrompt=true)"}`,
   );
-  log(`   Negative (-v): morph/identity koruması eklendi`);
   let dur = job.duration ?? 6;
   let res = dur === 10 ? "768" : "1080";
   if (res !== "1080") {

@@ -7,8 +7,8 @@ export const MAX_V1 = 460;
 export const MAX_V2 = 260;
 export const MAX_V3 = 520;
 export const STYLE_TAG_FACE =
-  "Vibrant colorful 3D cartoon, big expressive exaggerated faces, bright animation, smooth shading";
-export const STYLE_TAG_PLAIN = "Vibrant colorful 3D cartoon, bright animation, smooth shading";
+  "3D children's cartoon, big expressive exaggerated faces";
+export const STYLE_TAG_PLAIN = "3D children's cartoon";
 
 /** Promptlar prompts/ klasöründe (Faz 6'da gemini_direct.py'den çıkarıldı). */
 function loadPromptFile(name: string): string {

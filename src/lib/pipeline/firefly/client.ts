@@ -1,12 +1,29 @@
 import fs from "fs";
 import path from "path";
+import { randomBytes } from "crypto";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import { CODE_ROOT } from "@/lib/config";
+import { fireflyFetch } from "./http";
+
+/** Adobe Firefly nonce format: 64 hex (sha256). UUID formatı Adobe fingerprint filtresinde takılıyor. */
+export function freshNonce(): string {
+  return randomBytes(32).toString("hex");
+}
 
 export const UPLOAD_URL = "https://firefly-3p.ff.adobe.io/v2/storage/image";
 export const GENERATE_3P_ASYNC = "https://firefly-3p.ff.adobe.io/v2/3p-videos/generate-async";
 export const API_KEY = "clio-playground-web";
+const DEFAULT_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:135.0) Gecko/20100101 Firefox/135.0";
+
+function loadApiKey(): string {
+  return readOptional("firefly_api_key.txt") || API_KEY;
+}
+
+function loadUserAgent(): string {
+  return readOptional("firefly_user_agent.txt") || DEFAULT_UA;
+}
 
 const POLL_INTERVAL = 5_000;
 const POLL_TIMEOUT = 600_000;
@@ -36,38 +53,61 @@ export function loadToken(): string {
   } catch {
     token = readOptional("firefly_token.txt");
   }
-  if (!token) throw new Error("Firefly token yok — panelde ff_token girin veya firefly_token.txt");
+  if (!token) throw new Error("Firefly token yok — panelde Firefly Curl yapıştır veya firefly_token.txt");
   return token.replace(/^Bearer\s+/i, "").trim();
 }
 
-export function baseHeaders(): Record<string, string> {
-  const h: Record<string, string> = {
-    accept: "*/*",
-    "accept-language": "en-US,en;q=0.9",
-    authorization: `Bearer ${loadToken()}`,
-    origin: "https://firefly.adobe.com",
-    referer: "https://firefly.adobe.com/",
-    "user-agent":
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
-    "x-api-key": API_KEY,
-  };
-  const arpPath = pathFromEnv("FIREFLY_ARP_FILE", "firefly_arp.txt");
-  try {
-    const arp = fs.readFileSync(arpPath, "utf8").trim();
-    if (arp) h["x-arp-session-id"] = arp;
-  } catch {
-    const arp = readOptional("firefly_arp.txt");
-    if (arp) h["x-arp-session-id"] = arp;
+/**
+ * Firefly 3p — tarayıcı Firefox 153 isteğiyle birebir header seti.
+ *
+ * Header sırası ÖNEMLİ (bot fingerprint): object insertion order korunur.
+ * Firefox 153'ün gerçek generate-async isteğiyle aynı sıra:
+ *   User-Agent → Accept → Accept-Language → Accept-Encoding →
+ *   Referer → Content-Type → Authorization → x-api-key → x-nonce →
+ *   x-arp-session-id → Origin → Connection → Sec-Fetch-* → Priority → TE
+ *
+ * `arpFile` undefined → varsayılan `firefly_arp.txt` denenir.
+ * `arpFile` null      → hiç ARP eklenmez.
+ * `arpValue`          → doğrudan verilen değer (dosya okuma bypass).
+ */
+export function buildFireflyHeaders(opts?: {
+  contentType?: string;
+  arpFile?: string | null;
+  arpValue?: string | null;
+}): Record<string, string> {
+  const h: Record<string, string> = {};
+  // Curl'den kayıtlı UA varsa onu kullan; yoksa Firefox135 (curl-impersonate ile uyumlu)
+  h["User-Agent"] = loadUserAgent();
+  h["Accept"] = "*/*";
+  h["Accept-Language"] = "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7";
+  h["Accept-Encoding"] = "gzip, deflate, br, zstd";
+  h["Referer"] = "https://firefly.adobe.com/";
+  if (opts?.contentType) h["content-type"] = opts.contentType;
+  h["authorization"] = `Bearer ${loadToken()}`;
+  h["x-api-key"] = loadApiKey();
+  h["x-nonce"] = freshNonce();
+
+  let arp: string | null = null;
+  if (opts?.arpValue !== undefined) {
+    arp = opts.arpValue;
+  } else {
+    const arpName = opts?.arpFile === undefined ? "firefly_arp.txt" : opts.arpFile;
+    if (arpName) arp = readOptional(arpName);
   }
-  const noncePath = pathFromEnv("FIREFLY_NONCE_FILE", "firefly_nonce.txt");
-  try {
-    const nonce = fs.readFileSync(noncePath, "utf8").trim();
-    if (nonce) h["x-nonce"] = nonce;
-  } catch {
-    const nonce = readOptional("firefly_nonce.txt");
-    if (nonce) h["x-nonce"] = nonce;
-  }
+  if (arp) h["x-arp-session-id"] = arp;
+
+  h["Origin"] = "https://firefly.adobe.com";
+  h["Connection"] = "keep-alive";
+  h["Sec-Fetch-Dest"] = "empty";
+  h["Sec-Fetch-Mode"] = "cors";
+  h["Sec-Fetch-Site"] = "cross-site";
+  h["Priority"] = "u=4";
+  h["TE"] = "trailers";
   return h;
+}
+
+export function baseHeaders(): Record<string, string> {
+  return buildFireflyHeaders();
 }
 
 class HttpError extends Error {
@@ -92,16 +132,18 @@ export async function uploadImage(imagePath: string, log = console.log): Promise
 
   const ctype = guessContentType(imagePath);
   const data = fs.readFileSync(imagePath);
-  const headers = { ...baseHeaders(), "content-type": ctype };
+  const headers = buildFireflyHeaders({ contentType: ctype });
 
   log(`>> [0] yükleniyor: ${path.basename(imagePath)}  (${Math.round(data.length / 1024)} KB, ${ctype})`);
-  const resp = await fetch(UPLOAD_URL, {
+  const resp = await fireflyFetch(UPLOAD_URL, {
     method: "POST",
     headers,
     body: new Uint8Array(data),
   });
   log(`   HTTP ${resp.status}`);
-  if (resp.status === 401) throw new Error("401 = token süresi dolmuş (upload).");
+  if (resp.status === 401) {
+    throw new Error("Firefly Bearer token süresi dolmuş (görsel yükleme) — panelden Firefly Token yenile");
+  }
   if (!resp.ok) throw new HttpError(`upload HTTP ${resp.status}`, resp.status);
 
   const out = (await resp.json()) as Record<string, unknown>;
@@ -139,9 +181,11 @@ export async function pollResult(
   const start = Date.now();
 
   while (Date.now() - start < POLL_TIMEOUT) {
-    const resp = await fetch(resultUrl, { headers: baseHeaders() });
+    const resp = await fireflyFetch(resultUrl, { headers: baseHeaders() });
     const elapsed = Math.floor((Date.now() - start) / 1000);
-    if (resp.status === 401) throw new Error("401 = token süresi dolmuş (poll).");
+    if (resp.status === 401) {
+      throw new Error("Firefly Bearer token süresi dolmuş (sonuç bekleme) — panelden Firefly Token yenile");
+    }
     if (!resp.ok) throw new HttpError(`poll HTTP ${resp.status}`, resp.status);
 
     let data: Record<string, unknown>;
@@ -187,6 +231,7 @@ export async function downloadVideo(
 ): Promise<string> {
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   log(`>> [3] indiriliyor -> ${path.basename(outPath)}`);
+  // Presigned S3 URL — Firefly header'ları GEREKMEZ, kullanmıyoruz.
   const r = await fetch(presignedUrl);
   if (!r.ok || !r.body) throw new HttpError(`download HTTP ${r.status}`, r.status);
   const nodeStream = Readable.fromWeb(r.body as import("stream/web").ReadableStream);

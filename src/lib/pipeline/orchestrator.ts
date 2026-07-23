@@ -2,6 +2,8 @@ import fs from "fs";
 import path from "path";
 import { cleanStagedApiKeyFiles, resolveApiKey } from "@/lib/api-keys";
 import { KEYFRAMES_SOURCE_FILE } from "@/lib/ingest";
+import { notifyPipeline } from "@/lib/telegram";
+import { watchProjectCredentialExpiries } from "@/lib/token-expiry-watch";
 import { writeRunstate } from "@/lib/runstate";
 import { getPipelineEngine } from "./engines";
 import type { RunOptions, RunPhase } from "./types";
@@ -54,7 +56,11 @@ export async function runPipeline(opts: RunOptions): Promise<number> {
 
   try {
     updateRunstate("basliyor", { project: projectName, provider: opts.provider, started_at: Date.now() / 1000 });
+    watchProjectCredentialExpiries(projectName, true);
+    await notifyPipeline("run_start", { project: projectName, provider: opts.provider });
 
+    // Varsayılan: mevcut promptları koru, yalnızca eksikleri üret (veya hepsi hazırsa anında geç)
+    // regeneratePrompts: baştan yeniden yaz
     updateRunstate("prompt_uretiliyor", { project: projectName });
     const rcPrompt = await engine.runPromptGeneration(opts, projectName);
     if (rcPrompt !== 0) {
@@ -64,6 +70,7 @@ export async function runPipeline(opts: RunOptions): Promise<number> {
           : `prompt üretimi başarısız (rc=${rcPrompt})`;
       fs.appendFileSync(opts.logPath, `\n❌ ${hint}\n`, "utf8");
       updateRunstate("hata", { project: projectName, error: hint });
+      await notifyPipeline("run_error", { project: projectName, message: hint, provider: opts.provider });
       return rcPrompt;
     }
 
@@ -71,14 +78,34 @@ export async function runPipeline(opts: RunOptions): Promise<number> {
     const rc = await engine.runVideoProduction(opts, projectName);
     exitCode = rc;
     updateRunstate(rc === 0 ? "bitti" : "hata", { project: projectName, rc });
+    if (rc === 0) {
+      await notifyPipeline("run_done", { project: projectName, provider: opts.provider });
+    } else {
+      await notifyPipeline("run_error", {
+        project: projectName,
+        provider: opts.provider,
+        message: `Video üretimi başarısız (çıkış kodu ${rc})`,
+      });
+    }
     return rc;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    fs.appendFileSync(opts.logPath, `\nORCHESTRATOR ERROR: ${msg}\n`, "utf8");
+    // "fetch failed" gibi jenerik mesajlarda gerçek sebep .cause içinde saklı
+    const parts: string[] = [`ORCHESTRATOR ERROR: ${msg}`];
+    const cause = (e as { cause?: unknown })?.cause;
+    if (cause) {
+      const c = cause as { code?: string; errno?: string; message?: string; stack?: string };
+      const cparts = [c.code, c.errno, c.message].filter(Boolean).join(" | ");
+      parts.push(`  cause: ${cparts || String(cause)}`);
+      if (c.stack) parts.push(`  cause.stack:\n${c.stack}`);
+    }
+    if (e instanceof Error && e.stack) parts.push(`  stack:\n${e.stack}`);
+    fs.appendFileSync(opts.logPath, `\n${parts.join("\n")}\n`, "utf8");
     updateRunstate("hata", { project: projectName, error: msg });
+    await notifyPipeline("run_error", { project: projectName, message: msg, provider: opts.provider });
     return 1;
   } finally {
     cleanupCredentialFiles(opts.env);
-    cleanStagedApiKeyFiles();
+    cleanStagedApiKeyFiles(opts.env);
   }
 }

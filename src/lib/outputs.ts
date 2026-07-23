@@ -47,7 +47,7 @@ export function listProjectOutputs(
       const full = path.join(dir, name);
       const st = fs.statSync(full);
       if (!st.isFile() || st.size <= 0) return null;
-      const m = name.match(/^(scene_\d+)_.*_(v[123])\.mp4$/i);
+      const m = name.match(/^(scene_\d+)_.*_(v[1234])\.mp4$/i);
       return {
         name,
         size: st.size,

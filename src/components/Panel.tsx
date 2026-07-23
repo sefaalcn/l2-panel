@@ -147,6 +147,7 @@ function StartConfirmModal({
     scenario: string;
     concurrency: number;
     promptOptimizer: boolean;
+    regenPrompts: boolean;
   };
 }) {
   if (!open) return null;
@@ -164,6 +165,10 @@ function StartConfirmModal({
           )}
           <div><dt>Senaryo</dt><dd>{summary.scenario}</dd></div>
           <div><dt>Hailuo Optimizer</dt><dd>{summary.promptOptimizer ? "Açık" : "Kapalı (verbatim)"}</dd></div>
+          <div>
+            <dt>Promptlar</dt>
+            <dd>{summary.regenPrompts ? "Baştan yeniden üret (Gemini)" : "Mevcut + eksikleri tamamla"}</dd>
+          </div>
           <div><dt>Eşzamanlılık</dt><dd>{summary.concurrency}</dd></div>
         </dl>
         <div className="modal-actions">
@@ -175,13 +180,14 @@ function StartConfirmModal({
   );
 }
 
-const VARIANT_KEYS = ["v1", "v2", "v3"] as const;
+const VARIANT_KEYS = ["v1", "v2", "v3", "v4"] as const;
 type VariantKey = (typeof VARIANT_KEYS)[number];
 
 const VARIANT_LABELS: Record<VariantKey, string> = {
-  v1: "v1 — Gemini optimize",
-  v2: "v2 — slow motion",
-  v3: "v3 — orijinal prompt (EN çeviri, optimizer kapalı)",
+  v1: "v1 — ana hareket (Hailuo optimizer açık)",
+  v2: "v2 — slow motion (Hailuo optimizer açık)",
+  v3: "v3 — orijinal EN çeviri (Hailuo optimizer kapalı)",
+  v4: "v4 — geekfree ekstra (Hailuo optimizer açık)",
 };
 
 export default function Panel() {
@@ -191,10 +197,12 @@ export default function Panel() {
   const [project, setProject] = useState("");
   const [creds, setCreds] = useState<Record<string, string>>({});
   const [optimizer, setOptimizer] = useState(true);
+  const [regenPrompts, setRegenPrompts] = useState(false);
   const [variantSel, setVariantSel] = useState<Record<VariantKey, boolean>>({
     v1: true,
     v2: true,
     v3: true,
+    v4: false,
   });
   const [concurrency, setConcurrency] = useState(2);
   const [variantsSummary, setVariantsSummary] = useState("");
@@ -211,9 +219,29 @@ export default function Panel() {
   >([]);
   const [outputFolder, setOutputFolder] = useState("hailuo_router_videos/");
   const [outputsLoading, setOutputsLoading] = useState(false);
+  const [failByFile, setFailByFile] = useState<
+    Record<string, { tags: string[]; note?: string }>
+  >({});
+  const [failTagMeta, setFailTagMeta] = useState<{ key: string; label: string }[]>([]);
+  const [failSelected, setFailSelected] = useState<Record<string, boolean>>({});
+  const [failPickTags, setFailPickTags] = useState<Record<string, boolean>>({});
+  const [failNote, setFailNote] = useState("");
+  const [failBusy, setFailBusy] = useState(false);
+  const [failMsg, setFailMsg] = useState("");
+  const [ruleModal, setRuleModal] = useState<{
+    understanding: string;
+    proposed_rule: string;
+    tags: string[];
+    note: string;
+    files: { file: string; scene: string | null; variant: string | null }[];
+  } | null>(null);
+  const [ruleRefine, setRuleRefine] = useState("");
+  const [learnedCount, setLearnedCount] = useState({ must: 0, soft: 0 });
   const [preflightTxt, setPreflightTxt] = useState("");
   const [tokMsg, setTokMsg] = useState("");
   const [tokOk, setTokOk] = useState<boolean | null>(null);
+  const [ffTokMsg, setFfTokMsg] = useState("");
+  const [ffTokOk, setFfTokOk] = useState<boolean | null>(null);
   const [startMsg, setStartMsg] = useState("");
   const [current, setCurrent] = useState<string | null>(null);
   const [liveTxt, setLiveTxt] = useState("boşta");
@@ -234,11 +262,15 @@ export default function Panel() {
   const [cookieSaveMsg, setCookieSaveMsg] = useState("");
   const [projectSaveMsg, setProjectSaveMsg] = useState("");
   const [ffTokenSaveMsg, setFfTokenSaveMsg] = useState("");
+  const [geminiSaveMsg, setGeminiSaveMsg] = useState("");
+  const [geminiSavedMask, setGeminiSavedMask] = useState("");
   const [openFields, setOpenFields] = useState<Record<string, boolean>>({});
   const [useAnthropic, setUseAnthropic] = useState(false);
   const [apiKeys, setApiKeys] = useState({ GEMINI_API_KEY: "", ANTHROPIC_API_KEY: "" });
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [sceneCount, setSceneCount] = useState<number | null>(null);
+  const [geekfreeSceneCount, setGeekfreeSceneCount] = useState<number>(0);
+  const [expiryWarnings, setExpiryWarnings] = useState<{ label: string; message: string }[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const geminiInputRef = useRef<HTMLInputElement>(null);
   const anthropicInputRef = useRef<HTMLInputElement>(null);
@@ -272,6 +304,7 @@ export default function Panel() {
       credentials: Record<string, string>;
       found?: Record<string, boolean>;
       cookie?: { ok: boolean; valid: boolean | null; message: string };
+      expiring_soon?: { label: string; message: string }[];
     }>(`/api/credentials${q}`);
     const loaded = d.credentials || {};
     if (Object.keys(loaded).length) {
@@ -287,11 +320,30 @@ export default function Panel() {
       setCookieValid(null);
       setCookieMsg("");
     }
+    setExpiryWarnings(d.expiring_soon || []);
   }, [mergeCreds]);
 
   const loadProjects = useCallback(async () => {
     const d = await jget<{ projects: Project[] }>("/api/projects");
     setProjects(d.projects || []);
+  }, []);
+
+  const loadApiKeyStatus = useCallback(async () => {
+    try {
+      const d = await jget<{
+        keys: Record<string, { set: boolean; masked?: string }>;
+      }>("/api/keys");
+      const gem = d.keys?.GEMINI_API_KEY;
+      const anth = d.keys?.ANTHROPIC_API_KEY;
+      setEnvSet((prev) => ({
+        ...prev,
+        GEMINI_API_KEY: Boolean(gem?.set),
+        ANTHROPIC_API_KEY: Boolean(anth?.set),
+      }));
+      setGeminiSavedMask(gem?.masked || "");
+    } catch {
+      /* */
+    }
   }, []);
 
   useEffect(() => {
@@ -304,13 +356,16 @@ export default function Panel() {
       setOptimizer(opt?.default !== false);
       await loadProjects();
       await loadCredentials();
+      await loadApiKeyStatus();
     })().catch(console.error);
-  }, [loadProjects, loadCredentials]);
+  }, [loadProjects, loadCredentials, loadApiKeyStatus]);
 
   const loadOutputs = useCallback(async (projectName?: string, provider?: string) => {
     const p = projectName || project;
     if (!p) {
       setOutputs([]);
+      setFailByFile({});
+      setFailSelected({});
       return;
     }
     const prov = provider || (needsFirefly && !needsHailuo ? "firefly" : "hailuo");
@@ -323,6 +378,28 @@ export default function Panel() {
       }>(`/api/project/${encodeURIComponent(p)}/outputs?provider=${encodeURIComponent(prov)}`);
       setOutputs(d.files || []);
       if (d.output_folder) setOutputFolder(d.output_folder);
+      try {
+        const fl = await jget<{
+          tags: { key: string; label: string }[];
+          items: { file: string; tags: string[]; note?: string }[];
+        }>(`/api/project/${encodeURIComponent(p)}/fail-lessons`);
+        setFailTagMeta(fl.tags || []);
+        const map: Record<string, { tags: string[]; note?: string }> = {};
+        for (const it of fl.items || []) {
+          map[it.file] = { tags: it.tags || [], note: it.note };
+        }
+        setFailByFile(map);
+        try {
+          const lr = await jget<{ must: string[]; soft: string[] }>(
+            `/api/project/${encodeURIComponent(p)}/learned-rules`,
+          );
+          setLearnedCount({ must: lr.must?.length || 0, soft: lr.soft?.length || 0 });
+        } catch {
+          /* */
+        }
+      } catch {
+        /* fail-lessons yoksa sessiz */
+      }
     } catch {
       setOutputs([]);
     } finally {
@@ -333,6 +410,194 @@ export default function Panel() {
   useEffect(() => {
     void loadOutputs(project || undefined);
   }, [project, loadOutputs]);
+
+  const failSelectedNames = useMemo(
+    () => Object.keys(failSelected).filter((k) => failSelected[k]),
+    [failSelected],
+  );
+  const failPickTagKeys = useMemo(
+    () => Object.keys(failPickTags).filter((k) => failPickTags[k]),
+    [failPickTags],
+  );
+
+  const analyzeFailForRules = useCallback(async () => {
+    if (!project || !failSelectedNames.length || !failPickTagKeys.length) {
+      setFailMsg("En az bir video ve bir neden seç");
+      return;
+    }
+    setFailBusy(true);
+    setFailMsg("");
+    setRuleModal(null);
+    try {
+      const files = failSelectedNames.map((name) => {
+        const f = outputs.find((o) => o.name === name);
+        return {
+          file: name,
+          scene: f?.scene ?? null,
+          variant: f?.variant ?? null,
+        };
+      });
+      const { ok, d } = await jpost<{
+        detail?: string;
+        understanding?: string;
+        proposed_rule?: string;
+        tags?: string[];
+        note?: string;
+        files?: { file: string; scene: string | null; variant: string | null }[];
+      }>(`/api/project/${encodeURIComponent(project)}/learned-rules`, {
+        action: "analyze",
+        tags: failPickTagKeys,
+        note: failNote.trim() || undefined,
+        files,
+      });
+      if (!ok) throw new Error(d.detail || "Analiz başarısız");
+      if (!d.understanding || !d.proposed_rule) throw new Error("Gemini özet üretemedi");
+      setRuleModal({
+        understanding: d.understanding,
+        proposed_rule: d.proposed_rule,
+        tags: d.tags || failPickTagKeys,
+        note: d.note || failNote.trim(),
+        files: d.files || files,
+      });
+      setRuleRefine("");
+      setFailMsg("Gemini anladığını yazdı — popup’tan onayla veya düzelt");
+    } catch (e) {
+      setFailMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFailBusy(false);
+    }
+  }, [project, failSelectedNames, failPickTagKeys, failNote, outputs]);
+
+  const refineRuleAnalysis = useCallback(async () => {
+    if (!project || !ruleModal) return;
+    if (!ruleRefine.trim()) {
+      setFailMsg("Daha detaylı açıklama yaz");
+      return;
+    }
+    setFailBusy(true);
+    try {
+      const { ok, d } = await jpost<{
+        detail?: string;
+        understanding?: string;
+        proposed_rule?: string;
+      }>(`/api/project/${encodeURIComponent(project)}/learned-rules`, {
+        action: "refine",
+        tags: ruleModal.tags,
+        note: ruleModal.note,
+        files: ruleModal.files,
+        previous_understanding: ruleModal.understanding,
+        previous_rule: ruleModal.proposed_rule,
+        refine: ruleRefine.trim(),
+      });
+      if (!ok) throw new Error(d.detail || "Yeniden analiz başarısız");
+      if (!d.understanding || !d.proposed_rule) throw new Error("Gemini özet üretemedi");
+      setRuleModal({
+        ...ruleModal,
+        understanding: d.understanding,
+        proposed_rule: d.proposed_rule,
+      });
+      setRuleRefine("");
+      setFailMsg("Güncellendi — tekrar kontrol et");
+    } catch (e) {
+      setFailMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFailBusy(false);
+    }
+  }, [project, ruleModal, ruleRefine]);
+
+  const approveLearnedRule = useCallback(
+    async (severity: "must" | "soft") => {
+      if (!project || !ruleModal) return;
+      setFailBusy(true);
+      try {
+        const { ok, d } = await jpost<{
+          detail?: string;
+          message?: string;
+          must?: string[];
+          soft?: string[];
+        }>(`/api/project/${encodeURIComponent(project)}/learned-rules`, {
+          action: "approve",
+          proposed_rule: ruleModal.proposed_rule,
+          severity,
+          tags: ruleModal.tags,
+          note: ruleModal.note,
+          files: ruleModal.files,
+        });
+        if (!ok) throw new Error(d.detail || "Kural eklenemedi");
+        setLearnedCount({ must: d.must?.length || 0, soft: d.soft?.length || 0 });
+        setRuleModal(null);
+        setFailSelected({});
+        setFailMsg(d.message || "Kural eklendi");
+        await loadOutputs(project);
+      } catch (e) {
+        setFailMsg(e instanceof Error ? e.message : String(e));
+      } finally {
+        setFailBusy(false);
+      }
+    },
+    [project, ruleModal, loadOutputs],
+  );
+
+  const saveFailLessons = useCallback(async () => {
+    if (!project || !failSelectedNames.length || !failPickTagKeys.length) {
+      setFailMsg("En az bir video ve bir neden seç");
+      return;
+    }
+    setFailBusy(true);
+    setFailMsg("");
+    try {
+      const items = failSelectedNames.map((name) => {
+        const f = outputs.find((o) => o.name === name);
+        return {
+          file: name,
+          scene: f?.scene ?? null,
+          variant: f?.variant ?? null,
+          tags: failPickTagKeys,
+          note: failNote.trim() || undefined,
+        };
+      });
+      const { ok, d } = await jpost<{
+        detail?: string;
+        items?: { file: string; tags: string[]; note?: string }[];
+      }>(`/api/project/${encodeURIComponent(project)}/fail-lessons`, { action: "upsert", items });
+      if (!ok) throw new Error(d.detail || "Kayıt başarısız");
+      if (Array.isArray(d.items)) {
+        const full: Record<string, { tags: string[]; note?: string }> = {};
+        for (const it of d.items) full[it.file] = { tags: it.tags || [], note: it.note };
+        setFailByFile(full);
+      }
+      setFailSelected({});
+      setFailMsg("Sadece işaret kaydedildi — kural için «Analiz et» kullan");
+    } catch (e) {
+      setFailMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFailBusy(false);
+    }
+  }, [project, failSelectedNames, failPickTagKeys, failNote, outputs]);
+
+  const clearFailLessons = useCallback(async () => {
+    if (!project || !failSelectedNames.length) return;
+    setFailBusy(true);
+    try {
+      const { ok, d } = await jpost<{
+        detail?: string;
+        items?: { file: string; tags: string[]; note?: string }[];
+      }>(`/api/project/${encodeURIComponent(project)}/fail-lessons`, {
+        action: "remove",
+        files: failSelectedNames,
+      });
+      if (!ok) throw new Error(d.detail || "Silinemedi");
+      const full: Record<string, { tags: string[]; note?: string }> = {};
+      for (const it of d.items || []) full[it.file] = { tags: it.tags || [], note: it.note };
+      setFailByFile(full);
+      setFailSelected({});
+      setFailMsg("İşaret kaldırıldı");
+    } catch (e) {
+      setFailMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFailBusy(false);
+    }
+  }, [project, failSelectedNames]);
 
   useEffect(() => {
     if (project) void loadCredentials(project);
@@ -357,6 +622,7 @@ export default function Panel() {
       setVariantsSummary("");
       setTotalVideos(null);
       setSceneCount(null);
+      setGeekfreeSceneCount(0);
       setNeedsHailuo(true);
       setNeedsFirefly(false);
       setHailuoSceneCount(null);
@@ -365,6 +631,11 @@ export default function Panel() {
     }
     const p = projects.find((x) => x.name === project);
     if (p?.keyframes_source) setKeyframesSource(p.keyframes_source);
+  }, [project, projects]);
+
+  useEffect(() => {
+    if (!project) return;
+    const q = new URLSearchParams({ keyframes_source: keyframesSource });
     jget<{
       scenario: string;
       scene_count: number;
@@ -372,13 +643,14 @@ export default function Panel() {
       keyframes_source?: KeyframesSource;
       variants_summary?: string;
       total_videos?: number;
+      scene_plan?: { variants?: number }[];
       needs_gemini?: boolean;
       has_firefly_scenes?: boolean;
       has_hailuo_scenes?: boolean;
       hailuo_scene_count?: number;
       firefly_scene_count?: number;
       firefly_models?: string[];
-    }>(`/api/project/${encodeURIComponent(project)}/preflight`)
+    }>(`/api/project/${encodeURIComponent(project)}/preflight?${q}`)
       .then((d) => {
         setScenario(d.scenario);
         setNeedsGemini(Boolean(d.needs_gemini));
@@ -392,7 +664,6 @@ export default function Panel() {
         setFireflyModels(d.firefly_models || []);
         setHailuoSceneCount(d.hailuo_scene_count ?? null);
         setFireflySceneCount(d.firefly_scene_count ?? null);
-        if (d.keyframes_source) setKeyframesSource(d.keyframes_source);
         setSceneCount(d.scene_count ?? null);
         const scLbl: Record<string, string> = {
           A: "Senaryo A (scene_description → JSON video_model)",
@@ -400,7 +671,7 @@ export default function Panel() {
           "B-eksik": "Senaryo B — EKSİK (video yok)",
         };
         const w = d.warnings || [];
-        const src = d.keyframes_source === "swapped" ? "swapped" : "original";
+        const src = keyframesSource === "swapped" ? "swapped" : "original";
         const routeBits: string[] = [];
         if (hl || (!ff && (d.scene_count || 0) > 0)) {
           routeBits.push(`${d.hailuo_scene_count ?? "?"}×Hailuo`);
@@ -415,9 +686,11 @@ export default function Panel() {
             (routeBits.length ? ` · ${routeBits.join(" + ")}` : "") +
             (w.length ? ` · ⚠ ${w.length} uyarı` : ""),
         );
+        const geek = (d.scene_plan || []).filter((r) => Number(r.variants) === 4).length;
+        setGeekfreeSceneCount(geek);
       })
       .catch(() => setScenario(null));
-  }, [project, projects]);
+  }, [project, keyframesSource]);
 
   useEffect(() => {
     if (sceneCount == null) {
@@ -425,28 +698,57 @@ export default function Panel() {
       setVariantsSummary("");
       return;
     }
-    const n = selectedVariants.length;
-    setTotalVideos(sceneCount * n);
-    setVariantsSummary(
-      n === 3
-        ? `${sceneCount} sahne × v1+v2+v3`
-        : n
-          ? `${sceneCount} sahne × ${selectedVariants.join("+")}`
-          : "varyant seçilmedi",
-    );
-  }, [sceneCount, selectedVariants]);
+
+    const hasV4 = selectedVariants.includes("v4");
+    const core = selectedVariants.filter((v) => v !== "v4");
+    const coreCount = core.length;
+    const total = sceneCount * coreCount + (hasV4 ? geekfreeSceneCount : 0);
+    setTotalVideos(total);
+
+    if (!selectedVariants.length) {
+      setVariantsSummary("varyant seçilmedi");
+      return;
+    }
+
+    if (hasV4) {
+      if (!coreCount) {
+        setVariantsSummary(`${geekfreeSceneCount}×v4 (geekfree)`);
+      } else if (coreCount === 3) {
+        setVariantsSummary(`${sceneCount} sahne × v1+v2+v3 + ${geekfreeSceneCount}×v4`);
+      } else {
+        setVariantsSummary(`${sceneCount} sahne × ${core.join("+")} + ${geekfreeSceneCount}×v4`);
+      }
+    } else {
+      setVariantsSummary(
+        selectedVariants.length === 3
+          ? `${sceneCount} sahne × v1+v2+v3`
+          : `${sceneCount} sahne × ${selectedVariants.join("+")}`,
+      );
+    }
+  }, [sceneCount, selectedVariants, geekfreeSceneCount]);
+
+  useEffect(() => {
+    if (!project) {
+      setExpiryWarnings([]);
+      return;
+    }
+    const id = setInterval(() => void loadCredentials(project), 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [project, loadCredentials]);
+
+  const pmeta = projects.find((p) => p.name === project);
 
   const missing = useMemo(() => {
     const out: string[] = [];
     if (!project) out.push("Üretilecek Proje seç");
-    if (!selectedVariants.length) out.push("En az bir varyant seç (v1/v2/v3)");
+    if (!selectedVariants.length) out.push("En az bir varyant seç (v1/v2/v3/v4)");
 
     if (needsHailuo) {
       for (const cr of hailuoModel?.credentials || []) {
         if (cr.autoFromFile) {
           if (cr.required && !credFound[cr.key]) out.push(`${cr.label} (dosya)`);
           else if (cr.key === "cookie" && credFound.cookie && cookieValid === false) {
-            out.push("Cookie süresi dolmuş");
+            out.push("Hailuo Cookie süresi dolmuş");
           }
         } else if (cr.required && !creds[cr.key]?.trim()) {
           out.push(cr.label);
@@ -455,13 +757,25 @@ export default function Panel() {
     }
     if (needsFirefly) {
       if (!creds.ff_token?.trim() && !credFound.ff_token) {
-        out.push("Firefly Token (JSON video_model sahneleri)");
+        out.push("Firefly Curl (JSON video_model sahneleri)");
       }
     }
-    if (needsGemini && !envSet.GEMINI_API_KEY && !apiKeys.GEMINI_API_KEY.trim()) {
+    if (
+      (regenPrompts || !pmeta?.has_prompts) &&
+      needsGemini &&
+      !envSet.GEMINI_API_KEY &&
+      !apiKeys.GEMINI_API_KEY.trim()
+    ) {
       out.push("GEMINI_API_KEY yok (v1/v2 üretimi)");
     }
     if (scenario === "B-eksik") out.push("proje eksik: scene_description yok ve kaynak video yok");
+    if (project && keyframesSource === "swapped" && !pmeta?.has_keyframes_swapped) {
+      out.push("Swapped seçili ama keyframes_swapped yok — ZIP'i Swapped olarak yükle");
+    }
+    if (project && keyframesSource === "original" && !pmeta?.has_keyframes) {
+      out.push("Orijinal seçili ama keyframes yok — ZIP'i Orijinal olarak yükle");
+    }
+    for (const w of expiryWarnings) out.push(`⚠ ${w.message}`);
     return out;
   }, [
     project,
@@ -476,6 +790,12 @@ export default function Panel() {
     needsGemini,
     envSet,
     apiKeys,
+    expiryWarnings,
+    regenPrompts,
+    pmeta?.has_prompts,
+    pmeta?.has_keyframes,
+    pmeta?.has_keyframes_swapped,
+    keyframesSource,
   ]);
 
   function guessProjectName(f: File) {
@@ -553,23 +873,45 @@ export default function Panel() {
 
   async function onKey(k: "GEMINI_API_KEY" | "ANTHROPIC_API_KEY", v: string) {
     setApiKeys((prev) => ({ ...prev, [k]: v }));
+    if (k === "GEMINI_API_KEY") return;
     clearTimeout(keyTimers.current[k]);
+    if (!v.trim()) return;
     keyTimers.current[k] = setTimeout(async () => {
       const { d } = await jpost<Record<string, boolean>>("/api/keys", { [k]: v });
-      setEnvSet(d);
+      setEnvSet((prev) => ({ ...prev, ...d }));
     }, 400);
+  }
+
+  async function saveGeminiKeyFile() {
+    setGeminiSaveMsg("");
+    const v = (geminiInputRef.current?.value ?? apiKeys.GEMINI_API_KEY).trim();
+    if (!v) {
+      setGeminiSaveMsg("API key boş");
+      return;
+    }
+    const { ok, d } = await jpost<{ detail?: string; length?: number }>("/api/save-gemini-key", {
+      value: v,
+    });
+    if (!ok) {
+      setGeminiSaveMsg((d as { detail?: string }).detail || "kaydedilemedi");
+      return;
+    }
+    setGeminiSaveMsg(`✓ gemini_api_key.txt kaydedildi (${(d as { length?: number }).length} karakter)`);
+    setApiKeys((prev) => ({ ...prev, GEMINI_API_KEY: "" }));
+    await loadApiKeyStatus();
   }
 
   async function flushApiKeys() {
     const gemini = (geminiInputRef.current?.value ?? apiKeys.GEMINI_API_KEY).trim();
     const anthropic = (anthropicInputRef.current?.value ?? apiKeys.ANTHROPIC_API_KEY).trim();
-    const payload: Record<string, string> = {
-      GEMINI_API_KEY: gemini,
-      ANTHROPIC_API_KEY: useAnthropic ? anthropic : "",
-    };
-    const { d } = await jpost<Record<string, boolean>>("/api/keys", payload);
-    setEnvSet(d);
-    return payload;
+    const toSave: Record<string, string> = {};
+    if (gemini.length >= 20) toSave.GEMINI_API_KEY = gemini;
+    if (useAnthropic && anthropic) toSave.ANTHROPIC_API_KEY = anthropic;
+    if (Object.keys(toSave).length) {
+      const { d } = await jpost<Record<string, boolean>>("/api/keys", toSave);
+      setEnvSet((prev) => ({ ...prev, ...d }));
+    }
+    return toSave;
   }
 
   useEffect(() => {
@@ -580,12 +922,33 @@ export default function Panel() {
       return;
     }
     const id = setTimeout(async () => {
-      const { d } = await jpost<{ valid: boolean | null; message: string }>("/api/check-token", { value: t });
-      setTokOk(d.valid);
+      const { d } = await jpost<{ valid: boolean | null; message: string; expiring_soon?: boolean }>(
+        "/api/check-token",
+        { value: t },
+      );
+      setTokOk(d.expiring_soon ? false : d.valid);
       setTokMsg(d.message);
     }, 400);
     return () => clearTimeout(id);
   }, [creds.token]);
+
+  useEffect(() => {
+    const t = creds.ff_token?.trim();
+    if (!t) {
+      setFfTokMsg(credFound.ff_token ? "dosyada var" : "");
+      setFfTokOk(credFound.ff_token ? true : null);
+      return;
+    }
+    const id = setTimeout(async () => {
+      const { d } = await jpost<{ valid: boolean | null; message: string; expiring_soon?: boolean }>(
+        "/api/check-token",
+        { value: t },
+      );
+      setFfTokOk(d.expiring_soon ? false : d.valid);
+      setFfTokMsg(d.message);
+    }, 400);
+    return () => clearTimeout(id);
+  }, [creds.ff_token, credFound.ff_token]);
 
   function startPolling(name: string) {
     if (pollRef.current) clearInterval(pollRef.current);
@@ -593,6 +956,11 @@ export default function Panel() {
       try {
         const d = await jget<Record<string, unknown>>(`/api/progress/${encodeURIComponent(name)}`);
         setProgress(d);
+        if (Array.isArray(d.expiring_soon) && d.expiring_soon.length) {
+          setExpiryWarnings(
+            d.expiring_soon as { label: string; message: string }[],
+          );
+        }
         void loadOutputs(name);
         const phase = d.phase as string | null;
         const alive = d.alive !== false;
@@ -656,25 +1024,35 @@ export default function Panel() {
     setFfTokenSaveMsg("");
     const v = creds.ff_token?.trim();
     if (!v) {
-      setFfTokenSaveMsg("Token boş");
+      setFfTokenSaveMsg("Curl / token boş");
       return;
     }
-    const { ok, d } = await jpost<{ detail?: string; length?: number }>("/api/save-firefly-token", {
+    const { ok, d } = await jpost<{
+      detail?: string;
+      length?: number;
+      saved?: string[];
+      arp_saved?: boolean;
+      nonce_saved?: boolean;
+    }>("/api/save-firefly-token", {
       value: v,
     });
     if (!ok) {
       setFfTokenSaveMsg((d as { detail?: string }).detail || "kaydedilemedi");
       return;
     }
-    setFfTokenSaveMsg(`✓ firefly_token.txt kaydedildi (${(d as { length?: number }).length} karakter)`);
+    setFfTokenSaveMsg(
+      (d as { detail?: string }).detail ||
+        `✓ kaydedildi (${(d as { length?: number }).length} karakter)`,
+    );
     await loadCredentials(project || undefined);
   }
 
-  async function doStart() {
+  async function doStart(opts?: { scenes?: string | null; regeneratePrompts?: boolean }) {
     setConfirmOpen(false);
     setStartMsg("başlatılıyor…");
     const keys = await flushApiKeys();
-    const { ok, status, d } = await jpost<{ detail?: string; pid?: number }>("/api/start", {
+    const regen = opts?.regeneratePrompts ?? regenPrompts;
+    const body: Record<string, unknown> = {
       project,
       provider: "hailuo",
       variants: variantsParam,
@@ -682,19 +1060,54 @@ export default function Panel() {
       credentials: creds,
       prompt_optimizer: optimizer,
       keyframes_source: keyframesSource,
-      api_keys: keys,
-    });
+      regenerate_prompts: regen,
+      ...(Object.keys(keys).length ? { api_keys: keys } : {}),
+    };
+    if (opts?.scenes?.trim()) body.scenes = opts.scenes.trim();
+    const { ok, status, d } = await jpost<{
+      detail?: string;
+      pid?: number;
+      queue_note?: string | null;
+      other_runs?: { project?: string; pid?: number }[];
+    }>("/api/start", body);
     if (!ok) {
       const detail = (d as { detail?: string }).detail;
       setStartMsg(`${status}: ${detail || "hata"}`);
       return;
     }
-    setStartMsg(`başladı (pid ${d.pid})`);
+    const queue = (d as { queue_note?: string | null }).queue_note;
+    const others = (d as { other_runs?: { project?: string }[] }).other_runs;
+    const parallelNote =
+      others && others.length
+        ? ` · paralel ${others.length} başka koşu${queue ? ` (${queue})` : ""}`
+        : "";
+    setStartMsg(`başladı (pid ${d.pid})${parallelNote}`);
     setCurrent(project);
     startPolling(project);
   }
 
-  const pmeta = projects.find((p) => p.name === project);
+  async function retryFailed() {
+    if (!project) return;
+    setStartMsg("hatalılar temizleniyor…");
+    const { ok, status, d } = await jpost<{
+      detail?: string;
+      cleared?: number;
+      scenes?: number[];
+      scenes_param?: string;
+    }>(`/api/project/${encodeURIComponent(project)}/retry-failed`, {});
+    if (!ok) {
+      setStartMsg(`${status}: ${(d as { detail?: string }).detail || "retry hazırlanamadı"}`);
+      return;
+    }
+    const scenesParam = String(d.scenes_param || "").trim();
+    if (!scenesParam) {
+      setStartMsg(d.detail || "Yeniden denenecek hata yok");
+      return;
+    }
+    setStartMsg(`hatalı ${d.cleared} kayıt temizlendi → sahneler ${scenesParam}`);
+    // Video retry: mevcut promptlar + eksikler; Gemini baştan yok
+    await doStart({ scenes: scenesParam, regeneratePrompts: false });
+  }
 
   const scenarioLabel: Record<string, string> = {
     A: "A — scene_description",
@@ -717,13 +1130,22 @@ export default function Panel() {
           scenario: scenarioLabel[scenario || ""] || scenario || "—",
           concurrency: effectiveConcurrency,
           promptOptimizer: optimizer,
+          regenPrompts,
         }}
       />
       <header className="top">
-        <h1>L2.5 Üretim Paneli</h1>
-        <span className="sub">Next.js · ayrı alanlar: JSON · keyframes · video</span>
-        <span style={{ marginLeft: "auto" }} className="sub">
-          <span className="dot" style={{ background: liveOn ? "var(--ok)" : "var(--idle)" }} /> {liveTxt}
+        <div className="brand">
+          <h1>L2.5 Studio</h1>
+          <span className="brand-badge">{project || "—"}</span>
+        </div>
+        <span className="divider" aria-hidden />
+        <nav className="nav" aria-label="Bölümler">
+          <span className="nav-pill on">Panel</span>
+          <span className="nav-pill">Çıktılar</span>
+        </nav>
+        <span className="live">
+          <span className="dot" style={{ background: liveOn ? "var(--ok)" : "var(--idle)" }} />
+          {liveTxt}
         </span>
       </header>
 
@@ -761,27 +1183,25 @@ export default function Panel() {
 
             {derivedProject ? (
               <div className="derived">Proje: <b>{derivedProject}</b></div>
-            ) : (
-              <div className="hint" style={{ marginBottom: 8 }}>Proje adı JSON (veya ZIP/video) dosya adından alınır.</div>
-            )}
+            ) : null}
 
             <FileDrop
               label="1. Scenes JSON"
-              hint="*_scenes_manual.json"
+              hint="Scenes JSON"
               file={dropScenes}
               accept=".json,application/json"
               onFile={setDropScenes}
             />
             <FileDrop
               label={`2. Keyframes ZIP (${uploadSource === "swapped" ? "swapped" : "orijinal"})`}
-              hint="*.zip — seçilen köke yazılır"
+              hint="Keyframes ZIP"
               file={dropZip}
               accept=".zip,application/zip"
               onFile={setDropZip}
             />
             <FileDrop
               label="3. Kaynak video (opsiyonel)"
-              hint="prompt yoksa Gemini için .mp4 / .mov — ~200–300 MB desteklenir"
+              hint="Kaynak video"
               file={dropVideo}
               accept=".mp4,.mov,.webm,video/*"
               onFile={setDropVideo}
@@ -814,10 +1234,23 @@ export default function Panel() {
               <input
                 ref={geminiInputRef}
                 type="password"
-                placeholder="AIza…"
+                placeholder={envSet.GEMINI_API_KEY ? "kaydedildi — değiştirmek için yeni key yapıştır" : "API key yapıştır"}
                 value={apiKeys.GEMINI_API_KEY}
                 onChange={(e) => void onKey("GEMINI_API_KEY", e.target.value)}
               />
+              {geminiSavedMask && !apiKeys.GEMINI_API_KEY && (
+                <div className="mono-sm" style={{ marginTop: 6 }}>{geminiSavedMask}</div>
+              )}
+              <button
+                type="button"
+                className="ghost"
+                style={{ marginTop: 6 }}
+                disabled={!apiKeys.GEMINI_API_KEY.trim()}
+                onClick={() => void saveGeminiKeyFile()}
+              >
+                gemini_api_key.txt olarak kaydet
+              </button>
+              {geminiSaveMsg && <div className="hint" style={{ marginTop: 4 }}>{geminiSaveMsg}</div>}
             </CollapsibleFld>
             <CollapsibleFld
               id="anthropic"
@@ -841,7 +1274,7 @@ export default function Panel() {
               <input
                 ref={anthropicInputRef}
                 type="password"
-                placeholder="sk-ant…"
+                placeholder=""
                 disabled={!useAnthropic}
                 value={apiKeys.ANTHROPIC_API_KEY}
                 onChange={(e) => void onKey("ANTHROPIC_API_KEY", e.target.value)}
@@ -849,22 +1282,17 @@ export default function Panel() {
             </CollapsibleFld>
           </div>
 
-          <div className="hint" style={{ marginBottom: 12 }}>
-            Model seçimi yok — her sahne JSON&apos;daki <b>video_model</b> alanına gider
-            {hybridRun
-              ? ` (${hailuoSceneCount ?? "?"} Hailuo + ${fireflySceneCount ?? "?"} Firefly).`
-              : fireflyOnly
-                ? " (bu projede yalnız Firefly)."
-                : " (bu projede yalnız Hailuo)."}
-          </div>
-
           <CollapsibleFld
             id="cred-ff_token"
-            title={`Firefly Token${needsFirefly ? " *" : ""}`}
+            title={`Firefly Curl${needsFirefly ? " *" : ""}`}
             open={openFields["cred-ff_token"] !== false}
             onToggle={toggleField}
             badge={
-              creds.ff_token?.trim() || credFound.ff_token ? (
+              ffTokMsg ? (
+                <span className={`badge ${ffTokOk === true ? "b-ok" : ffTokOk === false ? "b-err" : "b-warn"}`}>
+                  {ffTokMsg}
+                </span>
+              ) : creds.ff_token?.trim() || credFound.ff_token ? (
                 <span className="badge b-ok">✓</span>
               ) : (
                 <span className={`badge ${needsFirefly ? "b-err" : "b-warn"}`}>
@@ -873,20 +1301,24 @@ export default function Panel() {
               )
             }
           >
-            <div className="hint" style={{ marginBottom: 8 }}>
-              F12 → Network → firefly.adobe.com isteği → Authorization: Bearer …
-              {needsFirefly
-                ? ` JSON'da ${fireflyModels.length ? fireflyModels.join(", ") : "Firefly/Kling"} sahneleri var — zorunlu.`
-                : " JSON'da Firefly/Kling sahneleri olunca kullanılır (şimdilik opsiyonel)."}
-            </div>
-            <input
-              type="password"
+            <textarea
+              rows={5}
               value={creds.ff_token || ""}
               onChange={(e) => setCreds((c) => ({ ...c, ff_token: e.target.value }))}
-              placeholder="Bearer eyJ… veya yalnız token"
+              placeholder="F12 → Network → generate-async veya ingest → Copy as cURL (Windows curl.exe OK)"
+              spellCheck={false}
+              style={{ fontFamily: "ui-monospace, monospace", fontSize: 11 }}
             />
-            {creds.ff_token?.trim() && (
+            <div className="hint" style={{ marginTop: 4 }}>
+              Bearer + x-arp-session-id + x-nonce (+ UA) ayıklanır → firefly/kling/runway dosyalarına yazılır
+            </div>
+            {creds.ff_token?.trim() && !/curl|authorization\s*:/i.test(creds.ff_token) && (
               <div className="mono-sm" style={{ marginTop: 6 }}>{mask(creds.ff_token)}</div>
+            )}
+            {creds.ff_token?.trim() && /curl|authorization\s*:/i.test(creds.ff_token) && (
+              <div className="mono-sm" style={{ marginTop: 6 }}>
+                cURL yapıştırıldı ({creds.ff_token.length} karakter)
+              </div>
             )}
             <button
               type="button"
@@ -895,7 +1327,7 @@ export default function Panel() {
               disabled={!creds.ff_token?.trim()}
               onClick={() => void saveFireflyTokenFile()}
             >
-              firefly_token.txt olarak kaydet
+              Curl&apos;den ayıkla ve kaydet
             </button>
             {ffTokenSaveMsg && <div className="hint" style={{ marginTop: 4 }}>{ffTokenSaveMsg}</div>}
           </CollapsibleFld>
@@ -932,9 +1364,6 @@ export default function Panel() {
               )}
               {cr.key === "project" && (
                 <>
-                  <div className="hint" style={{ marginTop: 6 }}>
-                    Hailuo URL&apos;deki projectId (örn. 535588690484457478). Başlatınca otomatik kaydedilir.
-                  </div>
                   <button
                     type="button"
                     className="ghost"
@@ -971,15 +1400,9 @@ export default function Panel() {
                 </span>
               }
             >
-              <div className="hint" style={{ marginBottom: 8 }}>
-                F12 → Network → hailuoai.video isteği → Request Headers → <b>Cookie</b> satırının tamamını kopyala.
-                {cookieOk && cookieValid !== false && (
-                  <> Mevcut dosya geçerli — yenilemek için yapıştırıp kaydet.</>
-                )}
-              </div>
               <textarea
                 rows={3}
-                placeholder="Cookie: satırı veya yalnızca değer (a=b; c=d; …)"
+                placeholder=""
                 value={cookiePaste}
                 onChange={(e) => setCookiePaste(e.target.value)}
                 style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }}
@@ -1017,12 +1440,36 @@ export default function Panel() {
                 />
                 Hailuo promptu kendi optimize etsin
               </label>
-              <div className="hint" style={{ marginTop: 8 }}>
-                Açık (varsayılan): Hailuo API&apos;ye gönderilen metni kendi iyileştirir.
-                Kapalı: JSON&apos;daki prompt aynen gider (eski verbatim mod). Firefly/Kling sahnelerine etki etmez.
-              </div>
             </CollapsibleFld>
           )}
+
+          <CollapsibleFld
+            id="regen-prompts"
+            title="Gemini promptlar"
+            open={openFields["regen-prompts"] !== false}
+            onToggle={toggleField}
+            badge={
+              <span className={`badge ${regenPrompts ? "b-warn" : "b-ok"}`}>
+                {regenPrompts ? "baştan" : pmeta?.has_prompts ? "mevcut+eksik" : "üret"}
+              </span>
+            }
+          >
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={regenPrompts}
+                onChange={(e) => setRegenPrompts(e.target.checked)}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                Promptları baştan yeniden üret
+                <div className="mono-sm" style={{ marginTop: 4, opacity: 0.75 }}>
+                  Kapalı (varsayılan): hazır promptlar kalır, yalnız eksikler Gemini’den gelir; hepsi
+                  hazırsa faz atlanır. Açık: seçili aralıktaki promptlar silinip yeniden yazılır.
+                </div>
+              </span>
+            </label>
+          </CollapsibleFld>
 
           <CollapsibleFld
               id="variants"
@@ -1035,9 +1482,6 @@ export default function Panel() {
                 </span>
               }
             >
-              <div className="hint" style={{ marginBottom: 8 }}>
-                Sahne başına gönderilecek promptlar. v1/v2 Hailuo optimizer ile; v3 = orijinal notun sadık İngilizce çevirisi (Hailuo&apos;da optimizer kapalı). Firefly/Kling aynı metni aynen alır.
-              </div>
               {VARIANT_KEYS.map((k) => (
                 <label
                   key={k}
@@ -1054,33 +1498,26 @@ export default function Panel() {
               <div className="seg" role="group" aria-label="Varyant önayarları" style={{ marginTop: 8 }}>
                 <button
                   type="button"
-                  className={`seg-btn${selectedVariants.length === 3 ? " on" : ""}`}
-                  onClick={() => setVariantSel({ v1: true, v2: true, v3: true })}
+                  className={`seg-btn${selectedVariants.length === 4 ? " on" : ""}`}
+                  onClick={() => setVariantSel({ v1: true, v2: true, v3: true, v4: true })}
                 >
                   Tümü
-                  <small>v1+v2+v3</small>
+                  <small>v1+v2+v3+v4</small>
                 </button>
                 {VARIANT_KEYS.map((k) => (
                   <button
                     key={k}
                     type="button"
                     className={`seg-btn${selectedVariants.length === 1 && variantSel[k] ? " on" : ""}`}
-                    onClick={() => setVariantSel({ v1: k === "v1", v2: k === "v2", v3: k === "v3" })}
+                    onClick={() =>
+                      setVariantSel({ v1: k === "v1", v2: k === "v2", v3: k === "v3", v4: k === "v4" })
+                    }
                   >
                     Yalnız {k}
                   </button>
                 ))}
               </div>
             </CollapsibleFld>
-
-          {needsFirefly && (
-            <div className="hint" style={{ marginBottom: 10 }}>
-              Kling dosyaları:{" "}
-              {credFound.ff_arp || credFound.kling_arp ? "arp ✓" : "kling_arp.txt / firefly_arp.txt —"}
-              {" · "}
-              {credFound.ff_nonce || credFound.kling_nonce ? "nonce ✓" : "kling_nonce.txt —"}
-            </div>
-          )}
 
           <label className="fld">
             <span>Üretilecek Proje</span>
@@ -1141,14 +1578,6 @@ export default function Panel() {
               disabled={fireflyOnly}
               onChange={(e) => setConcurrency(Number(e.target.value) || 2)}
             />
-            {hybridRun && (
-              <div className="hint">
-                Hailuo bu sayı kadar paralel; Kling/Firefly kendi içinde 1 (sıralı) ama Hailuo ile aynı anda çalışır.
-              </div>
-            )}
-            {fireflyOnly && (
-              <div className="hint">Yalnız Firefly/Kling — tek tek (biri bitince diğeri).</div>
-            )}
           </label>
 
           <button
@@ -1171,7 +1600,7 @@ export default function Panel() {
             <ProgressView
               d={progress}
               onStop={async () => {
-                await jpost("/api/stop", {});
+                await jpost("/api/stop", { project });
                 if (pollRef.current) clearInterval(pollRef.current);
                 setCurrent(null);
                 setLiveOn(false);
@@ -1181,6 +1610,7 @@ export default function Panel() {
                 const prov = String(progress.provider || (fireflyOnly ? "firefly" : "hailuo"));
                 await jpost("/api/open", { project: progress.project, target: "videos", provider: prov });
               }}
+              onRetryFailed={() => void retryFailed()}
             />
           )}
         </div>
@@ -1227,26 +1657,185 @@ export default function Panel() {
             <>
               <div className="hint" style={{ marginBottom: 10 }}>
                 {outputs.length} video · otomatik kayıt: <span className="mono-sm">{outputFolder}</span>
+                {Object.keys(failByFile).length > 0 && (
+                  <> · <span className="badge b-warn">{Object.keys(failByFile).length} kötü işaretli</span></>
+                )}
+              </div>
+              <div className="fail-box">
+                <div className="section-t" style={{ marginTop: 0 }}>Kötü çıktı → Gemini kural defteri</div>
+                <div className="hint" style={{ marginBottom: 8 }}>
+                  Bozuk videoyu seç + neden + not → <b>Analiz et</b>. Gemini anladığını popup’ta gösterir;
+                  onaylarsan kural defterine yazar (yalnız prompt yazarken kullanır — Hailuo/Firefly metnine eklenmez).
+                  {(learnedCount.must > 0 || learnedCount.soft > 0) && (
+                    <>
+                      {" "}
+                      Defter: <span className="badge b-ok">{learnedCount.must} kesin</span>{" "}
+                      <span className="badge b-warn">{learnedCount.soft} dikkat</span>
+                    </>
+                  )}
+                </div>
+                <div className="fail-tags">
+                  {(failTagMeta.length
+                    ? failTagMeta
+                    : [
+                        { key: "morph", label: "Morph" },
+                        { key: "end_miss", label: "End pose kaçtı" },
+                        { key: "frozen", label: "Donuk" },
+                        { key: "identity", label: "Kimlik" },
+                        { key: "physics_flat", label: "Fizik yok" },
+                        { key: "camera_fight", label: "Kamera" },
+                        { key: "too_much_action", label: "Fazla aksiyon" },
+                        { key: "story_break", label: "Olay/bağlam kopukluğu" },
+                      ]
+                  ).map((t) => (
+                    <label key={t.key} className={`fail-tag${failPickTags[t.key] ? " on" : ""}`}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(failPickTags[t.key])}
+                        onChange={(e) =>
+                          setFailPickTags((prev) => ({ ...prev, [t.key]: e.target.checked }))
+                        }
+                      />
+                      {t.label}
+                    </label>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  placeholder=""
+                  value={failNote}
+                  onChange={(e) => setFailNote(e.target.value)}
+                  style={{ marginTop: 8, marginBottom: 8 }}
+                />
+                <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="ghost sm"
+                    disabled={failBusy || !failSelectedNames.length || !failPickTagKeys.length}
+                    onClick={() => void analyzeFailForRules()}
+                    style={{ color: "var(--accent-ink)", borderColor: "var(--accent)" }}
+                  >
+                    {failBusy && !ruleModal ? "Analiz…" : "Analiz et (Gemini)"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost sm"
+                    disabled={failBusy || !failSelectedNames.length || !failPickTagKeys.length}
+                    onClick={() => void saveFailLessons()}
+                  >
+                    Sadece işaretle
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost sm"
+                    disabled={failBusy || !failSelectedNames.length}
+                    onClick={() => void clearFailLessons()}
+                  >
+                    İşareti kaldır
+                  </button>
+                </div>
+                {failMsg && <div className="hint" style={{ marginTop: 6 }}>{failMsg}</div>}
               </div>
               <ul className="out-list">
-                {outputs.map((f) => (
-                  <li key={f.name} className="out-row">
-                    <div className="out-meta">
-                      <span className="out-name">{f.name}</span>
-                      <span className="mono-sm out-sub">
-                        {[f.scene, f.variant, f.size_label].filter(Boolean).join(" · ")}
-                      </span>
-                    </div>
-                    <a className="ghost sm dl-btn" href={f.download_url} download={f.name}>
-                      İndir
-                    </a>
-                  </li>
-                ))}
+                {outputs.map((f) => {
+                  const marked = failByFile[f.name];
+                  return (
+                    <li key={f.name} className={`out-row${failSelected[f.name] ? " sel" : ""}${marked ? " bad" : ""}`}>
+                      <label className="out-check">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(failSelected[f.name])}
+                          onChange={(e) =>
+                            setFailSelected((prev) => ({ ...prev, [f.name]: e.target.checked }))
+                          }
+                        />
+                      </label>
+                      <div className="out-meta">
+                        <span className="out-name">{f.name}</span>
+                        <span className="mono-sm out-sub">
+                          {[f.scene, f.variant, f.size_label].filter(Boolean).join(" · ")}
+                          {marked?.tags?.length ? ` · ${marked.tags.join(", ")}` : ""}
+                        </span>
+                      </div>
+                      <a className="ghost sm dl-btn" href={f.download_url} download={f.name}>
+                        İndir
+                      </a>
+                    </li>
+                  );
+                })}
               </ul>
             </>
           )}
         </div>
       </div>
+
+      {ruleModal && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal-card">
+            <h3 style={{ margin: "0 0 10px", fontSize: 15 }}>Gemini ne anladı?</h3>
+            <div className="hint" style={{ marginBottom: 8 }}>
+              Kurallar deftere yazılmadan önce onayla. Beğenmezsen aşağıya daha detay yazıp yeniden analiz ettir.
+            </div>
+            <div className="modal-block">
+              <div className="section-t" style={{ marginTop: 0 }}>Anladığı</div>
+              <p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.45 }}>{ruleModal.understanding}</p>
+            </div>
+            <div className="modal-block">
+              <div className="section-t" style={{ marginTop: 0 }}>Önerilen kural</div>
+              <p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.45, fontFamily: "var(--mono)" }}>
+                {ruleModal.proposed_rule}
+              </p>
+            </div>
+            <label className="fld" style={{ marginBottom: 10 }}>
+              <span>Beğenmedim — daha detaylı anlat</span>
+              <input
+                type="text"
+                value={ruleRefine}
+                onChange={(e) => setRuleRefine(e.target.value)}
+                placeholder=""
+              />
+            </label>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+              <button
+                type="button"
+                className="ghost sm"
+                disabled={failBusy || !ruleRefine.trim()}
+                onClick={() => void refineRuleAnalysis()}
+              >
+                {failBusy ? "…" : "Yeniden analiz"}
+              </button>
+              <button
+                type="button"
+                className="ghost sm"
+                disabled={failBusy}
+                onClick={() => setRuleModal(null)}
+              >
+                İptal
+              </button>
+            </div>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="ghost sm"
+                disabled={failBusy}
+                onClick={() => void approveLearnedRule("must")}
+                style={{ color: "var(--err)", borderColor: "var(--err)", fontWeight: 700 }}
+              >
+                Kesin yargı olarak ekle
+              </button>
+              <button
+                type="button"
+                className="ghost sm"
+                disabled={failBusy}
+                onClick={() => void approveLearnedRule("soft")}
+                style={{ color: "var(--warn)", borderColor: "var(--warn)", fontWeight: 650 }}
+              >
+                Dikkat edilsin olarak ekle
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1255,10 +1844,12 @@ function ProgressView({
   d,
   onStop,
   onOpen,
+  onRetryFailed,
 }: {
   d: Record<string, unknown>;
   onStop: () => void;
   onOpen: () => void;
+  onRetryFailed?: () => void;
 }) {
   const phase = d.phase as string | null;
   const phaseMap: Record<string, [string, string]> = {
@@ -1276,6 +1867,15 @@ function ProgressView({
   const warnings = (d.warnings || []) as string[];
   const runError = d.error ? String(d.error) : null;
   const logTail = (d.log_tail || []) as string[];
+  const pm = (d.progress_meta || {}) as {
+    prompt?: { current?: number; total?: number; percent?: number };
+    video?: { current?: number; total?: number; percent?: number };
+  };
+  const activeProg = phase === "prompt_uretiliyor" ? pm.prompt : pm.video;
+  const progCurrent = Number(activeProg?.current || 0);
+  const progTotal = Number(activeProg?.total || 0);
+  const progPercent = Math.max(0, Math.min(100, Number(activeProg?.percent || 0)));
+  const canRetry = Boolean(onRetryFailed) && errors.length > 0 && !d.alive;
 
   return (
     <div>
@@ -1288,15 +1888,33 @@ function ProgressView({
           {runError}
         </div>
       )}
+      {progTotal > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div className="mono-sm" style={{ marginBottom: 6, display: "flex", justifyContent: "space-between" }}>
+            <span>{progCurrent}/{progTotal}</span>
+            <span>%{progPercent}</span>
+          </div>
+          <div style={{ height: 6, background: "var(--bg-2)", borderRadius: 999, overflow: "hidden" }}>
+            <div
+              style={{
+                width: `${progPercent}%`,
+                height: "100%",
+                background: "var(--accent)",
+                transition: "width 250ms ease",
+              }}
+            />
+          </div>
+        </div>
+      )}
       {phase === "prompt_uretiliyor" ? (
         <div className="waiting">⏳ Prompt üretiliyor (Gemini)…</div>
       ) : (
         <>
           <div className="stats">
-            <div className="stat done"><div className="n">{c.done || 0}</div><div className="k">bitti</div></div>
-            <div className="stat prod"><div className="n">{c.submitted || 0}</div><div className="k">üretiliyor</div></div>
-            <div className="stat err"><div className="n">{c.error || 0}</div><div className="k">hata</div></div>
-            <div className="stat"><div className="n">{((d.softened as unknown[]) || []).length}</div><div className="k">softened</div></div>
+            <div className="stat done"><div className="k">Tamamlanan</div><div className="n">{c.done || 0}</div></div>
+            <div className="stat prod"><div className="k">Üretiliyor</div><div className="n">{c.submitted || 0}</div></div>
+            <div className="stat err"><div className="k">Hata</div><div className="n">{c.error || 0}</div></div>
+            <div className="stat"><div className="k">Softened</div><div className="n">{((d.softened as unknown[]) || []).length}</div></div>
           </div>
           {producing.length > 0 && (
             <>
@@ -1306,7 +1924,19 @@ function ProgressView({
           )}
           {errors.length > 0 && (
             <>
-              <div className="section-t">Hatalar</div>
+              <div className="section-t" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span>Hatalar</span>
+                {canRetry && (
+                  <button
+                    type="button"
+                    className="ghost sm"
+                    style={{ color: "var(--accent-ink)", borderColor: "var(--accent)" }}
+                    onClick={onRetryFailed}
+                  >
+                    Hatalıları tekrar dene
+                  </button>
+                )}
+              </div>
               <ul className="list">
                 {errors.map((e) => (
                   <li key={e.id}><span className="chip c-err">hata</span> <div><b>{e.scene}</b><div className="mono-sm">{e.error}</div></div></li>
@@ -1330,6 +1960,16 @@ function ProgressView({
       )}
       <div className="actions">
         <button className="ghost" disabled={!d.alive} onClick={onStop}>Durdur</button>
+        {canRetry && (
+          <button
+            type="button"
+            className="ghost"
+            style={{ color: "var(--accent-ink)", borderColor: "var(--accent)" }}
+            onClick={onRetryFailed}
+          >
+            Hatalıları tekrar dene
+          </button>
+        )}
         <button className="ghost" style={{ color: "var(--accent-ink)", borderColor: "var(--accent)" }} onClick={onOpen}>
           Klasörü Aç
         </button>

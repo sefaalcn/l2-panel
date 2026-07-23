@@ -8,6 +8,10 @@ import {
   type KeyframesSource,
 } from "./ingest";
 import {
+  hasSceneDirs,
+  resolveKeyframesLeaf,
+} from "./pipeline/router/resolve";
+import {
   buildScenePlan,
   findScenesJson,
   loadScenesJsonFile,
@@ -105,8 +109,11 @@ export function preflight(name: string, sourceOverride?: KeyframesSource | null)
     ? parseKeyframesSource(sourceOverride)
     : s.keyframes_source;
   const kfRoot = keyframesDirName(source);
-  const kfDir = path.join(dir, kfRoot);
-  const hasActiveKf = dirHasFiles(kfDir);
+  const kfPreferred = path.join(dir, kfRoot);
+  const kfExists = fs.existsSync(kfPreferred);
+  const kfDir = kfExists ? resolveKeyframesLeaf(kfPreferred) : kfPreferred;
+  const hasActiveKf =
+    kfExists && (hasSceneDirs(kfDir) || dirHasFiles(kfDir));
 
   const scenesPath = findScenesJson(dir);
   if (!scenesPath) {
@@ -125,9 +132,15 @@ export function preflight(name: string, sourceOverride?: KeyframesSource | null)
   }
   const scenes = loadScenesJsonFile(scenesPath);
   const warnings: string[] = [];
-  if (!hasActiveKf) {
+  if (!kfExists) {
     warnings.push(
-      `${kfRoot}/ boş veya yok — keyframes ZIP yükle (kaynak: ${source})`,
+      source === "swapped"
+        ? "keyframes_swapped/ yok — Swapped ZIP yükle veya Orijinal seç (sessizce orijinale düşülmez)"
+        : "keyframes/ yok — Orijinal keyframes ZIP yükle",
+    );
+  } else if (!hasActiveKf) {
+    warnings.push(
+      `${kfRoot}/ boş — keyframes ZIP yükle (kaynak: ${source})`,
     );
   }
   let scenario: "A" | "B" | "B-eksik";
@@ -135,7 +148,7 @@ export function preflight(name: string, sourceOverride?: KeyframesSource | null)
   if (hasDescriptions) {
     scenario = "A";
     if (projectNeedsGemini(scenes)) {
-      warnings.push("Gemini: v1 (optimize) + v2 (slow motion); v3 = scene_description verbatim");
+      warnings.push("Gemini: v1 (optimize) + v2 (slow motion); v3 = scene_description verbatim; v4 = geekfree extra");
     }
   } else if (s.has_video) {
     scenario = "B";

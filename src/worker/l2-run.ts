@@ -35,6 +35,7 @@ function parseArgs(argv: string[]) {
     concurrency: concurrencyRaw ? Number(concurrencyRaw) : null,
     scenes: get("--scenes"),
     noOptimizer: has("--no-optimizer"),
+    regeneratePrompts: has("--regenerate-prompts"),
     keyframesSource: parseKeyframesSource(get("--keyframes-source")),
     env: { ...process.env },
   };

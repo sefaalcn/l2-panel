@@ -81,6 +81,13 @@ function remapZipEntry(name: string, targetRoot: string): string | null {
   if (n.startsWith("keyframes/")) {
     return `${targetRoot}/${n.slice("keyframes/".length)}`;
   }
+
+  // .../xxx_keyframes/.../keyframes/scene_XXX/... veya .../xxx_keyframes/scene_XXX/...
+  const nestedKf = n.match(/(?:^|\/)[^/]*keyframes(?:_swapped)?\/(?:.*\/)?keyframes\/(.+)$/i);
+  if (nestedKf?.[1]) return `${targetRoot}/${nestedKf[1]}`;
+  const namedRoot = n.match(/(?:^|\/)[^/]*keyframes(?:_swapped)?\/(scene[^/]+\/.+)$/i);
+  if (namedRoot?.[1]) return `${targetRoot}/${namedRoot[1]}`;
+
   // Düz scene_XXX/... veya frame_* içeren göreli yollar
   if (/^scene[^/]+\//i.test(n) || /(^|\/)frame_/i.test(n) || /(^|\/)(first|last)_frame/i.test(n)) {
     return `${targetRoot}/${n}`;

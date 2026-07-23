@@ -1,5 +1,8 @@
 import fs from "fs";
 import path from "path";
+import { formatAuthError, isAuthError } from "@/lib/auth-errors";
+import { withProviderLock } from "@/lib/provider-lock";
+import { notifyPipeline } from "@/lib/telegram";
 import { sceneVariantKeys, loadProjectScenes, isGeekFree } from "@/lib/scenes";
 import { routeScene, sceneUsesFirefly } from "@/lib/video-model";
 import {
@@ -144,6 +147,21 @@ async function generateGuarded(
 ): Promise<[string, AdapterSpec, Record<string, unknown>]> {
   const env = cfg.env ?? process.env;
   const log = cfg.log ?? console.log;
+  const project = path.basename(cfg.videoDir);
+  return withProviderLock(sceneProvider, project, log, () =>
+    generateGuardedInner(spec, job, cfg, mode, sceneProvider, env, log),
+  );
+}
+
+async function generateGuardedInner(
+  spec: AdapterSpec,
+  job: Job,
+  cfg: PipelineConfig,
+  mode: string,
+  sceneProvider: ProviderKey,
+  env: NodeJS.ProcessEnv,
+  log: (s: string) => void,
+): Promise<[string, AdapterSpec, Record<string, unknown>]> {
   const origPrompt = job.prompt;
   try {
     const out = await spec.generate(job);
@@ -251,8 +269,24 @@ function resolveVariantPrompt(s: SceneRecord, variant: string): string | null {
 }
 
 function variantPromptOptimizer(variant: string, cfg: PipelineConfig): boolean {
+  // v3 = verbatim (Hailuo optimizer KAPALI). v1/v2 = Hailuo'nun kendi Prompt Optimizer'ı AÇIK.
   if (variant === "v3") return false;
   return cfg.promptOptimizer !== false;
+}
+
+function notifyProgressError(
+  cfg: PipelineConfig,
+  provider: ProviderKey,
+  scene: string,
+  variant: string,
+  error: string,
+) {
+  const msg = `${scene} · ${variant} — ${isAuthError(error) ? formatAuthError(error) : error}`;
+  notifyPipeline(isAuthError(error) ? "auth_error" : "run_error", {
+    project: path.basename(cfg.videoDir),
+    provider,
+    message: msg,
+  });
 }
 
 export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
@@ -468,6 +502,7 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
         outPath,
         duration: dur,
         videoDir: cfg.videoDir,
+        resolution: sceneProvider === "firefly" ? undefined : undefined,
         onSubmit,
         resumeVidId,
         promptOptimizer: variantPromptOptimizer(variant, cfg),
@@ -500,6 +535,7 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
         else if (s4meta.mod_retry) extra = `  [S4 retry #${s4meta.mod_retry} geçti]`;
         log(`   [${variant}] OK -> ${ref}${extra}`);
       } catch (e) {
+        const msg = String(e);
         const recoverable = recordFailure(progress, outName, {
           status: "failed",
           adapter: adapterKey,
@@ -507,9 +543,10 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
           variant,
           scene: label,
           mode,
-          error: String(e),
+          error: msg,
         });
         saveProviderProgress(sceneProvider);
+        notifyProgressError(cfg, sceneProvider, label, variant, msg);
         if (recoverable) {
           tally.submitted += 1;
           log(`   [${variant}] BAŞARISIZ ama vid_id KAYITLI -> resume kurtarır: ${e}`);
@@ -517,9 +554,9 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
           tally.failed += 1;
           log(`   [${variant}] BAŞARISIZ: ${e}`);
         }
-        const msg = String(e);
-        if (msg.includes("401") || msg.includes("403") || msg.includes("nonce")) {
-          log("\n!! Kimlik/nonce hatası — duruyorum. Token yenileyip tekrar başlat.");
+        if (isAuthError(msg)) {
+          const hint = formatAuthError(msg);
+          log(`\n!! ${hint} — duruyorum.`);
           summary(cfg, tally, byModel, log);
           return tally;
         }
@@ -658,6 +695,8 @@ async function runPool(
         outPath: sink.localPath(outName),
         duration: dur,
         videoDir: cfg.videoDir,
+        // Firefly adapter'ları kendi default'unu belirler (Kling 2.5 → 1080p, diğerleri → 720p)
+        resolution: undefined,
         resumeVidId,
         outName,
         promptOptimizer: variantPromptOptimizer(variant, cfg),
@@ -707,6 +746,14 @@ async function runPool(
       }
       log(`   [${sceneProvider}/${r.job.variant}] OK -> ${r.job.outName}${extra}`);
     } else {
+      const err = String(r.error || "bilinmeyen hata");
+      notifyProgressError(
+        cfg,
+        sceneProvider,
+        String(r.job.submitMeta?.scene || r.job.scene?.label || "scene"),
+        r.job.variant,
+        err,
+      );
       const rec = store.get(r.job.outName!);
       if (rec?.vid_id) {
         tally.submitted += 1;
