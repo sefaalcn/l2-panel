@@ -198,7 +198,8 @@ async function generateGuardedInner(
       log(`   [S4] soften ${i + 1}/3 denendi`);
       try {
         const out = await spec.generate(job);
-        return [out, spec, { softened: true, soften_attempt: i + 1, final_prompt: soft }];
+        persistSoftenedPrompt(cfg, job, soft);
+        return [out, spec, { softened: true, soften_attempt: i + 1, soften_source: "anthropic", final_prompt: soft }];
       } catch (e) {
         if (moderation.classify(e) !== "moderation") {
           job.prompt = origPrompt;
@@ -208,7 +209,32 @@ async function generateGuardedInner(
     }
     job.prompt = origPrompt;
   } else {
-    log("   [S4] ANTHROPIC_API_KEY yok -> yumuşatma ATLANDI");
+    log("   [S4] ANTHROPIC_API_KEY yok -> Anthropic yumuşatma ATLANDI");
+  }
+
+  // 1 tur Gemini: baby → baby character vb.
+  if (moderation.geminiModerationAvailable(env)) {
+    try {
+      const soft = await moderation.softenWithGemini(origPrompt, env);
+      job.prompt = soft;
+      log(`   [S4] Gemini soften 1/1 denendi`);
+      try {
+        const out = await spec.generate(job);
+        persistSoftenedPrompt(cfg, job, soft);
+        return [out, spec, { softened: true, soften_attempt: 1, soften_source: "gemini", final_prompt: soft }];
+      } catch (e) {
+        if (moderation.classify(e) !== "moderation") {
+          job.prompt = origPrompt;
+          throw e;
+        }
+        log(`   [S4] Gemini soften de moderasyona takıldı`);
+      }
+    } catch (se) {
+      log(`   [S4] Gemini soften hata (${se}) -> atlanıyor`);
+    }
+    job.prompt = origPrompt;
+  } else {
+    log("   [S4] GEMINI_API_KEY yok -> Gemini yumuşatma ATLANDI");
   }
 
   // model fallback (YALNIZ Firefly start_only: kling<->runway)
@@ -235,6 +261,27 @@ async function generateGuardedInner(
   }
 
   throw new Error(`[S4] moderasyon zinciri tükendi: ${origPrompt.slice(0, 60)}`);
+}
+
+/** Softened prompt'u hailuo_prompts_claude.json içine yaz (sonraki retry için). */
+function persistSoftenedPrompt(cfg: PipelineConfig, job: Job, soft: string) {
+  try {
+    if (!cfg.promptsJson || !fs.existsSync(cfg.promptsJson)) return;
+    const scenes = JSON.parse(fs.readFileSync(cfg.promptsJson, "utf8")) as SceneRecord[];
+    if (!Array.isArray(scenes)) return;
+    const idx = Number(job.scene?.index);
+    const variant = String(job.variant || "v1");
+    const row = scenes.find((s) => Number(s.index) === idx);
+    if (!row) return;
+    if (variant === "v3") {
+      row.v3 = soft;
+    } else {
+      row[variant] = soft;
+    }
+    fs.writeFileSync(cfg.promptsJson, JSON.stringify(scenes, null, 2), "utf8");
+  } catch {
+    /* best-effort */
+  }
 }
 
 function summary(cfg: PipelineConfig, tally: Tally, byModel: Record<string, number>, log: (s: string) => void) {
@@ -544,6 +591,8 @@ export async function runPipeline(cfg: PipelineConfig): Promise<Tally> {
           scene: label,
           mode,
           error: msg,
+          prompt: job.prompt,
+          scene_index: Number(s.index) || null,
         });
         saveProviderProgress(sceneProvider);
         notifyProgressError(cfg, sceneProvider, label, variant, msg);

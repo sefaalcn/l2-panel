@@ -54,7 +54,14 @@ export async function GET(
   const counts = { done: 0, submitted: 0, error: 0, other: 0 };
   const producing: { id: string; label: string }[] = [];
   const softened: { scene: string; attempt?: number }[] = [];
-  const errors: { id: string; scene: string; error: string }[] = [];
+  const errors: {
+    id: string;
+    scene: string;
+    error: string;
+    variant?: string;
+    prompt?: string;
+    scene_index?: number | null;
+  }[] = [];
 
   const rs = readRunstate(project);
   const provider =
@@ -84,10 +91,19 @@ export async function GET(
           });
         } else if (st === "error" || st === "failed" || st === "no_input_frame") {
           counts.error += 1;
+          const variant = v.variant ? String(v.variant) : "";
+          const prompt = v.prompt ? String(v.prompt) : "";
+          const scene_index =
+            typeof v.scene_index === "number"
+              ? v.scene_index
+              : Number(String(scene).match(/(\d+)/)?.[1] || NaN) || null;
           errors.push({
             id: k,
             scene,
             error: formatAuthError(String(v.error || v.status || "")).slice(0, 200),
+            variant: variant || undefined,
+            prompt: prompt || undefined,
+            scene_index,
           });
         } else counts.other += 1;
         if (v.softened) softened.push({ scene, attempt: v.soften_attempt as number | undefined });

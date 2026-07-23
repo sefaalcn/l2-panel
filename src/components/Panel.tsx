@@ -236,6 +236,13 @@ export default function Panel() {
     files: { file: string; scene: string | null; variant: string | null }[];
   } | null>(null);
   const [ruleRefine, setRuleRefine] = useState("");
+  const [promptEdit, setPromptEdit] = useState<{
+    sceneIndex: number;
+    label: string;
+    failedKey?: string;
+    failedVariant?: string;
+    initialPrompt?: string;
+  } | null>(null);
   const [learnedCount, setLearnedCount] = useState({ must: 0, soft: 0 });
   const [preflightTxt, setPreflightTxt] = useState("");
   const [tokMsg, setTokMsg] = useState("");
@@ -1047,7 +1054,11 @@ export default function Panel() {
     await loadCredentials(project || undefined);
   }
 
-  async function doStart(opts?: { scenes?: string | null; regeneratePrompts?: boolean }) {
+  async function doStart(opts?: {
+    scenes?: string | null;
+    regeneratePrompts?: boolean;
+    variants?: string | null;
+  }) {
     setConfirmOpen(false);
     setStartMsg("başlatılıyor…");
     const keys = await flushApiKeys();
@@ -1055,7 +1066,7 @@ export default function Panel() {
     const body: Record<string, unknown> = {
       project,
       provider: "hailuo",
-      variants: variantsParam,
+      variants: (opts?.variants?.trim() || variantsParam),
       concurrency: effectiveConcurrency,
       credentials: creds,
       prompt_optimizer: optimizer,
@@ -1107,6 +1118,63 @@ export default function Panel() {
     setStartMsg(`hatalı ${d.cleared} kayıt temizlendi → sahneler ${scenesParam}`);
     // Video retry: mevcut promptlar + eksikler; Gemini baştan yok
     await doStart({ scenes: scenesParam, regeneratePrompts: false });
+  }
+
+  async function openPromptEditor(opts: {
+    sceneIndex: number;
+    label?: string;
+    failedKey?: string;
+    failedVariant?: string;
+    initialPrompt?: string;
+  }) {
+    if (!opts.sceneIndex || opts.sceneIndex < 1) {
+      setStartMsg("Sahne numarası bulunamadı");
+      return;
+    }
+    setPromptEdit({
+      sceneIndex: opts.sceneIndex,
+      label: opts.label || `scene_${String(opts.sceneIndex).padStart(3, "0")}`,
+      failedKey: opts.failedKey,
+      failedVariant: opts.failedVariant,
+      initialPrompt: opts.initialPrompt,
+    });
+  }
+
+  async function resubmitPrompt(
+    text: string,
+    variantBtn: "default" | "v1" | "v2" | "v3",
+  ) {
+    if (!project || !promptEdit) return;
+    const trimmed = text.trim();
+    if (trimmed.length < 8) {
+      setStartMsg("Prompt çok kısa");
+      return;
+    }
+    setStartMsg("prompt kaydediliyor…");
+    const { ok, status, d } = await jpost<{
+      detail?: string;
+      scenes_param?: string;
+      variants?: string;
+    }>(`/api/project/${encodeURIComponent(project)}/scene-prompt`, {
+      scene: promptEdit.sceneIndex,
+      prompt: trimmed,
+      variant: variantBtn,
+      failedKey: promptEdit.failedKey,
+      failedVariant: promptEdit.failedVariant,
+    });
+    if (!ok) {
+      setStartMsg(`${status}: ${(d as { detail?: string }).detail || "prompt kaydedilemedi"}`);
+      return;
+    }
+    setPromptEdit(null);
+    setStartMsg(
+      `prompt → ${d.variants} · sahne ${d.scenes_param} yeniden gönderiliyor…`,
+    );
+    await doStart({
+      scenes: d.scenes_param || String(promptEdit.sceneIndex),
+      variants: d.variants || "v1",
+      regeneratePrompts: false,
+    });
   }
 
   const scenarioLabel: Record<string, string> = {
@@ -1611,6 +1679,18 @@ export default function Panel() {
                 await jpost("/api/open", { project: progress.project, target: "videos", provider: prov });
               }}
               onRetryFailed={() => void retryFailed()}
+              onEditPrompt={(err) => {
+                const idx =
+                  err.scene_index ||
+                  Number(String(err.scene).match(/(\d+)/)?.[1] || 0);
+                void openPromptEditor({
+                  sceneIndex: idx,
+                  label: err.scene,
+                  failedKey: err.id,
+                  failedVariant: err.variant,
+                  initialPrompt: err.prompt,
+                });
+              }}
             />
           )}
         </div>
@@ -1760,6 +1840,22 @@ export default function Panel() {
                       <a className="ghost sm dl-btn" href={f.download_url} download={f.name}>
                         İndir
                       </a>
+                      {f.scene && (
+                        <button
+                          type="button"
+                          className="ghost sm"
+                          onClick={() => {
+                            const idx = Number(String(f.scene).match(/(\d+)/)?.[1] || 0);
+                            void openPromptEditor({
+                              sceneIndex: idx,
+                              label: String(f.scene),
+                              failedVariant: f.variant || "v1",
+                            });
+                          }}
+                        >
+                          Prompt
+                        </button>
+                      )}
                     </li>
                   );
                 })}
@@ -1769,6 +1865,14 @@ export default function Panel() {
         </div>
       </div>
 
+      {promptEdit && project && (
+        <PromptResubmitModal
+          project={project}
+          target={promptEdit}
+          onCancel={() => setPromptEdit(null)}
+          onSend={(text, variant) => void resubmitPrompt(text, variant)}
+        />
+      )}
       {ruleModal && (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <div className="modal-card">
@@ -1845,11 +1949,20 @@ function ProgressView({
   onStop,
   onOpen,
   onRetryFailed,
+  onEditPrompt,
 }: {
   d: Record<string, unknown>;
   onStop: () => void;
   onOpen: () => void;
   onRetryFailed?: () => void;
+  onEditPrompt?: (err: {
+    id: string;
+    scene: string;
+    error: string;
+    variant?: string;
+    prompt?: string;
+    scene_index?: number | null;
+  }) => void;
 }) {
   const phase = d.phase as string | null;
   const phaseMap: Record<string, [string, string]> = {
@@ -1863,7 +1976,14 @@ function ProgressView({
   const [ptxt, pcls] = phaseMap[phase || ""] || ["Boşta", "p-idle"];
   const c = (d.counts || {}) as Record<string, number>;
   const producing = (d.producing || []) as { id: string; label: string }[];
-  const errors = (d.errors || []) as { id: string; scene: string; error: string }[];
+  const errors = (d.errors || []) as {
+    id: string;
+    scene: string;
+    error: string;
+    variant?: string;
+    prompt?: string;
+    scene_index?: number | null;
+  }[];
   const warnings = (d.warnings || []) as string[];
   const runError = d.error ? String(d.error) : null;
   const logTail = (d.log_tail || []) as string[];
@@ -1939,7 +2059,23 @@ function ProgressView({
               </div>
               <ul className="list">
                 {errors.map((e) => (
-                  <li key={e.id}><span className="chip c-err">hata</span> <div><b>{e.scene}</b><div className="mono-sm">{e.error}</div></div></li>
+                  <li key={e.id} style={{ alignItems: "flex-start" }}>
+                    <span className="chip c-err">hata</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <b>{e.scene}{e.variant ? ` · ${e.variant}` : ""}</b>
+                      <div className="mono-sm">{e.error}</div>
+                      {onEditPrompt && !d.alive && (
+                        <button
+                          type="button"
+                          className="ghost sm"
+                          style={{ marginTop: 6 }}
+                          onClick={() => onEditPrompt(e)}
+                        >
+                          Prompt düzenle / yeniden gönder
+                        </button>
+                      )}
+                    </div>
+                  </li>
                 ))}
               </ul>
             </>
@@ -1973,6 +2109,156 @@ function ProgressView({
         <button className="ghost" style={{ color: "var(--accent-ink)", borderColor: "var(--accent)" }} onClick={onOpen}>
           Klasörü Aç
         </button>
+      </div>
+    </div>
+  );
+}
+
+function PromptResubmitModal({
+  project,
+  target,
+  onCancel,
+  onSend,
+}: {
+  project: string;
+  target: {
+    sceneIndex: number;
+    label: string;
+    failedKey?: string;
+    failedVariant?: string;
+    initialPrompt?: string;
+  };
+  onCancel: () => void;
+  onSend: (text: string, variant: "default" | "v1" | "v2" | "v3") => void;
+}) {
+  const [text, setText] = useState(target.initialPrompt || "");
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [prompts, setPrompts] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setErr("");
+      try {
+        const d = await jget<{
+          prompts?: Record<string, string>;
+          detail?: string;
+        }>(
+          `/api/project/${encodeURIComponent(project)}/scene-prompt?scene=${target.sceneIndex}`,
+        );
+        if (cancelled) return;
+        const p = d.prompts || {};
+        setPrompts(p);
+        const prefer =
+          target.initialPrompt ||
+          (target.failedVariant && p[target.failedVariant]) ||
+          p.v1 ||
+          p.v3 ||
+          p.scene_desc ||
+          "";
+        setText(String(prefer || ""));
+      } catch (e) {
+        if (!cancelled) {
+          setErr(String(e));
+          if (target.initialPrompt) setText(target.initialPrompt);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [project, target.sceneIndex, target.failedVariant, target.initialPrompt]);
+
+  function loadVariant(v: string) {
+    const p = prompts[v];
+    if (p) setText(p);
+  }
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <div className="modal-card" style={{ maxWidth: 640, width: "min(640px, 94vw)" }}>
+        <h3 style={{ margin: "0 0 6px", fontSize: 15 }}>
+          Prompt · {target.label}
+          {target.failedVariant ? ` · ${target.failedVariant}` : ""}
+        </h3>
+        <div className="hint" style={{ marginBottom: 10 }}>
+          Düzenle, sonra Default / v1 / v2 / v3 ile yeniden gönder. Default = hatalı varyant
+          ({target.failedVariant || "v1"}).
+        </div>
+        {err && (
+          <div className="warns" style={{ marginBottom: 8, color: "var(--err)" }}>
+            {err}
+          </div>
+        )}
+        <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+          {(["v1", "v2", "v3"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              className="ghost sm"
+              disabled={loading || !prompts[v]}
+              onClick={() => loadVariant(v)}
+            >
+              Yükle {v}
+            </button>
+          ))}
+        </div>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          disabled={loading}
+          rows={8}
+          style={{
+            width: "100%",
+            fontFamily: "var(--mono)",
+            fontSize: 12.5,
+            lineHeight: 1.45,
+            marginBottom: 12,
+            resize: "vertical",
+          }}
+          placeholder={loading ? "yükleniyor…" : "prompt"}
+        />
+        <div className="modal-actions" style={{ flexWrap: "wrap" }}>
+          <button type="button" className="modal-cancel" onClick={onCancel}>
+            İptal
+          </button>
+          <button
+            type="button"
+            className="modal-confirm"
+            disabled={loading || text.trim().length < 8}
+            onClick={() => onSend(text, "default")}
+          >
+            Default
+          </button>
+          <button
+            type="button"
+            className="ghost sm"
+            disabled={loading || text.trim().length < 8}
+            onClick={() => onSend(text, "v1")}
+          >
+            v1
+          </button>
+          <button
+            type="button"
+            className="ghost sm"
+            disabled={loading || text.trim().length < 8}
+            onClick={() => onSend(text, "v2")}
+          >
+            v2
+          </button>
+          <button
+            type="button"
+            className="ghost sm"
+            disabled={loading || text.trim().length < 8}
+            onClick={() => onSend(text, "v3")}
+          >
+            v3
+          </button>
+        </div>
       </div>
     </div>
   );

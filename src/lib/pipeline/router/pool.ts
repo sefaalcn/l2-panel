@@ -75,7 +75,13 @@ export class Pool {
       await this.store.update(job.outName!, rec);
       return { job, ok: true, path, usedSpec, meta };
     } catch (e) {
-      const rec = { ...base, status: "error", error: String(e) };
+      const rec = {
+        ...base,
+        status: "error",
+        error: String(e),
+        prompt: job.prompt,
+        scene_index: Number(job.scene?.index) || null,
+      };
       await this.store.recordFailure(job.outName!, rec);
       return { job, ok: false, error: String(e) };
     }
